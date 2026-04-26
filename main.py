@@ -1,105 +1,117 @@
 import streamlit as st
 import cv2
-from deepface import DeepFace
 from PIL import Image
 import numpy as np
 import os
 from datetime import datetime
 import pandas as pd
-
 from streamlit_gsheets import GSheetsConnection
 
-# Crear conexión
+# Conexión Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Ejemplo de cómo guardar un registro
-if st.button("Confirmar Registro"):
-    df_nuevo = pd.DataFrame([{"Nombre": empleado_sel, "Fecha": ahora.strftime('%d/%m/%Y'), "Hora": ahora.strftime('%H:%M'), "Tipo": tipo_marca}])
-    # Aquí se envía a la nube
-    conn.create(data=df_nuevo) 
-    st.success("Guardado en Google Sheets")
-
-# Configuración visual de la App
 st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="centered")
-
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stButton>button { width: 100%; border-radius: 10px; height: 3em; background-color: #2e7d32; color: white; }
-    </style>
-    """, unsafe_allow_html=True)
 
 st.title("🚀 Centro de Control Cel")
 st.info("Sistema Biométrico de Asistencia")
 
-# --- Gestión de Empleados (Carga de fotos de referencia) ---
+# Crear carpeta de fotos
 if not os.path.exists('fotos_db'):
     os.makedirs('fotos_db')
 
-# Menú lateral para administración
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Administración")
     modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar Nuevo Empleado"])
 
-# --- LÓGICA: REGISTRAR NUEVO ---
+# ----------------------------
+# REGISTRAR EMPLEADO
+# ----------------------------
 if modo == "Registrar Nuevo Empleado":
     st.subheader("📝 Alta de Personal")
+
     nuevo_nombre = st.text_input("Nombre del trabajador")
     foto_perfil = st.file_uploader("Subir foto de referencia", type=['jpg', 'png'])
-    
+
     if st.button("Guardar Empleado"):
         if nuevo_nombre and foto_perfil:
-            img = Image.open(foto_perfil)
+            img = Image.open(foto_perfil).convert('L').resize((200, 200))
             img.save(f"fotos_db/{nuevo_nombre}.jpg")
-            st.success(f"Empleado {nuevo_nombre} registrado con éxito.")
+            st.success(f"Empleado {nuevo_nombre} registrado")
         else:
-            st.error("Por favor, completa el nombre y la foto.")
+            st.error("Completa todos los campos")
 
-# --- LÓGICA: MARCADO (PWA) ---
+# ----------------------------
+# FUNCION DE COMPARACIÓN SIMPLE
+# ----------------------------
+def comparar_imagenes(img1, img2):
+    img1 = cv2.resize(img1, (200, 200))
+    img2 = cv2.resize(img2, (200, 200))
+    
+    diff = cv2.absdiff(img1, img2)
+    score = np.mean(diff)
+    
+    return score
+
+# ----------------------------
+# MARCADO
+# ----------------------------
 else:
     st.subheader("📸 Registro de Jornada")
-    empleados = [f.split('.')[0] for f in os.listdir('fotos_db') if f.endswith(('.jpg', '.png'))]
-    
+
+    empleados = [f.split('.')[0] for f in os.listdir('fotos_db')]
+
     if not empleados:
-        st.warning("No hay empleados en la base de datos.")
+        st.warning("No hay empleados registrados")
     else:
         empleado_sel = st.selectbox("Selecciona tu nombre", empleados)
-        tipo_marca = st.radio("Tipo de registro", ["Entrada", "Salida"], horizontal=True)
-        
-        # Activa la cámara del celular
-        foto_selfie = st.camera_input("Tómate una foto para verificar")
+        tipo_marca = st.radio("Tipo", ["Entrada", "Salida"])
+
+        foto_selfie = st.camera_input("Tómate una foto")
 
         if foto_selfie:
-            with st.spinner("Procesando reconocimiento..."):
-                # Guardar captura temporal
-                img_selfie = Image.open(foto_selfie)
-                img_selfie.save("temp_cel.jpg")
-                
-                foto_referencia = f"fotos_db/{empleado_sel}.jpg"
+            st.info("Procesando...")
 
-                try:
-                    # Comparación Biométrica
-                    resultado = DeepFace.verify(
-                        img1_path=foto_referencia, 
-                        img2_path="temp_cel.jpg",
-                        model_name="VGG-Face",
-                        detector_backend="opencv",
-                        enforce_detection=True
-                    )
+            # Leer selfie
+            img_selfie = Image.open(foto_selfie).convert('L')
+            img_selfie_np = np.array(img_selfie)
 
-                    if resultado['verified']:
-                        ahora = datetime.now()
-                        st.balloons()
-                        st.success(f"✅ ¡Identidad Confirmada! {empleado_sel}")
-                        st.write(f"Registro de **{tipo_marca}** exitoso a las {ahora.strftime('%H:%M:%S')}")
-                        
-                        # AQUÍ SE CONECTARÍA CON GOOGLE SHEETS PARA GUARDAR EL DATO
-                        # Por ahora lo mostramos en pantalla
-                    else:
-                        st.error("❌ La cara no coincide. Intenta con mejor luz.")
-                
-                except Exception as e:
-                    st.error("No se pudo detectar un rostro claro.")
-                
-                if os.path.exists("temp_cel.jpg"):
-                    os.remove("temp_cel.jpg")
+            # Detectar rostro
+            face_cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            )
+
+            faces = face_cascade.detectMultiScale(img_selfie_np, 1.3, 5)
+
+            if len(faces) == 0:
+                st.error("No se detectó rostro")
+            else:
+                # Recortar rostro
+                (x, y, w, h) = faces[0]
+                rostro = img_selfie_np[y:y+h, x:x+w]
+
+                # Cargar referencia
+                ref_path = f"fotos_db/{empleado_sel}.jpg"
+                img_ref = cv2.imread(ref_path, 0)
+
+                score = comparar_imagenes(rostro, img_ref)
+
+                # Ajustar umbral (más bajo = más estricto)
+                if score < 60:
+                    ahora = datetime.now()
+
+                    st.success(f"✅ Bienvenido {empleado_sel}")
+                    st.write(f"{tipo_marca} registrada a las {ahora.strftime('%H:%M:%S')}")
+
+                    # Guardar en Google Sheets
+                    df_nuevo = pd.DataFrame([{
+                        "Nombre": empleado_sel,
+                        "Fecha": ahora.strftime('%d/%m/%Y'),
+                        "Hora": ahora.strftime('%H:%M'),
+                        "Tipo": tipo_marca
+                    }])
+
+                    conn.create(data=df_nuevo)
+
+                else:
+                    st.error("❌ Rostro no coincide")
