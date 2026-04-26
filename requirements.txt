@@ -1,4 +1,6 @@
 streamlit
-deepface
 opencv-python-headless
-st-gsheets-connection
+face-recognition
+numpy
+pandas
+Pillow
