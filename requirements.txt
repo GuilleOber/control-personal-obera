@@ -1,0 +1,6 @@
+streamlit
+opencv-python-headless
+deepface
+pandas
+pillow
+tf-keras
