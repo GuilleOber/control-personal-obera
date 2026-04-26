@@ -7,6 +7,18 @@ import os
 from datetime import datetime
 import pandas as pd
 
+from streamlit_gsheets import GSheetsConnection
+
+# Crear conexión
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+# Ejemplo de cómo guardar un registro
+if st.button("Confirmar Registro"):
+    df_nuevo = pd.DataFrame([{"Nombre": empleado_sel, "Fecha": ahora.strftime('%d/%m/%Y'), "Hora": ahora.strftime('%H:%M'), "Tipo": tipo_marca}])
+    # Aquí se envía a la nube
+    conn.create(data=df_nuevo) 
+    st.success("Guardado en Google Sheets")
+
 # Configuración visual de la App
 st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="centered")
 
