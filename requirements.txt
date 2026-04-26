@@ -1,6 +1,4 @@
 streamlit
-opencv-python-headless
 deepface
-pandas
-pillow
-tf-keras
+opencv-python-headless
+st-gsheets-connection
