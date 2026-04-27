@@ -1,20 +1,59 @@
 import streamlit as st
-import cv2
-import numpy as np
-import os
 import sqlite3
 import uuid
 from datetime import datetime
+import pandas as pd
+import qrcode
+import os
 from PIL import Image
-from deepface import DeepFace
+import numpy as np
+import cv2
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # ----------------------------
 # CONFIG
 # ----------------------------
-st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="centered")
+st.set_page_config(page_title="Control Personal PRO", page_icon="👤")
 
-st.title("🚀 Centro de Control Cel")
-st.info("Sistema Biométrico de Asistencia")
+st.title("🏢 Control de Personal PRO")
+st.info("QR + Foto + Auditoría + Reportes")
+
+# ----------------------------
+# GOOGLE SHEETS
+# ----------------------------
+SHEET_ID = "1rtduRSVLvJk1381A4PZ_ALELRmg_behDl9d_jimr4GA"
+
+def conectar_sheets():
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+
+    creds = ServiceAccountCredentials.from_json_keyfile_name(
+        "credentials.json", scope
+    )
+
+    client = gspread.authorize(creds)
+    return client.open_by_key(SHEET_ID)
+
+def guardar_en_sheets(nombre, fecha, hora, tipo):
+    try:
+        sheet = conectar_sheets()
+
+        # hoja del día
+        hoja_nombre = fecha
+
+        try:
+            ws = sheet.worksheet(hoja_nombre)
+        except:
+            ws = sheet.add_worksheet(title=hoja_nombre, rows="1000", cols="10")
+            ws.append_row(["Nombre", "Fecha", "Hora", "Tipo"])
+
+        ws.append_row([nombre, fecha, hora, tipo])
+
+    except Exception as e:
+        st.warning(f"Error Google Sheets: {e}")
 
 # ----------------------------
 # DB
@@ -26,7 +65,7 @@ c.execute('''
 CREATE TABLE IF NOT EXISTS empleados (
     id TEXT PRIMARY KEY,
     nombre TEXT,
-    foto TEXT
+    qr TEXT
 )
 ''')
 
@@ -37,155 +76,129 @@ CREATE TABLE IF NOT EXISTS registros (
     nombre TEXT,
     fecha TEXT,
     hora TEXT,
-    tipo TEXT
+    tipo TEXT,
+    foto TEXT
 )
 ''')
 
 conn.commit()
 
 # ----------------------------
-# CARPETA
+# CARPETAS
 # ----------------------------
-if not os.path.exists('fotos_db'):
-    os.makedirs('fotos_db')
-
-# ----------------------------
-# FUNCION VERIFICACION (DeepFace)
-# ----------------------------
-def verificar_rostro(img1_path, img2_array):
-    try:
-        # Guardar temporalmente la selfie
-        temp_path = "temp.jpg"
-        cv2.imwrite(temp_path, img2_array)
-
-        result = DeepFace.verify(
-            img1_path=img1_path,
-            img2_path=temp_path,
-            enforce_detection=False  # evita errores si no detecta bien
-        )
-
-        os.remove(temp_path)
-
-        return result["verified"], result["distance"]
-
-    except Exception as e:
-        return False, 1.0
+os.makedirs("qr_codes", exist_ok=True)
+os.makedirs("fotos_registros", exist_ok=True)
 
 # ----------------------------
 # SIDEBAR
 # ----------------------------
 with st.sidebar:
-    st.header("⚙️ Administración")
-    modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar Empleados"])
+    modo = st.radio("Menú", ["Registrar Empleado", "Marcar Asistencia", "Auditoría"])
 
 # ----------------------------
-# REGISTRO DE EMPLEADOS
+# REGISTRO EMPLEADO
 # ----------------------------
-if modo == "Registrar Empleados":
+if modo == "Registrar Empleado":
 
-    st.subheader("👥 Gestión de Empleados")
+    st.subheader("➕ Nuevo Empleado")
 
     nombre = st.text_input("Nombre")
-    foto = st.file_uploader("Foto", type=['jpg', 'png'])
 
-    if st.button("Guardar empleado"):
-        if nombre and foto:
-            id_emp = str(uuid.uuid4())
-            ruta = f"fotos_db/{id_emp}.jpg"
+    if st.button("Crear empleado"):
+        if nombre:
+            emp_id = str(uuid.uuid4())
 
-            img = Image.open(foto)
-            img = np.array(img)
+            qr_img = qrcode.make(emp_id)
+            qr_path = f"qr_codes/{emp_id}.png"
+            qr_img.save(qr_path)
 
-            cv2.imwrite(ruta, img)
-
-            c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (id_emp, nombre, ruta))
+            c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (emp_id, nombre, qr_path))
             conn.commit()
 
-            st.success("Empleado guardado correctamente")
-            st.rerun()
-        else:
-            st.error("Completa todos los campos")
-
-    st.divider()
-
-    st.subheader("📋 Empleados registrados")
-
-    empleados = c.execute("SELECT * FROM empleados").fetchall()
-
-    if empleados:
-        for emp in empleados:
-            st.write(f"👤 {emp[1]}")
-            st.image(emp[2], width=150)
-    else:
-        st.info("No hay empleados registrados")
+            st.success("Empleado creado")
+            st.image(qr_path)
 
 # ----------------------------
-# MARCADO
+# MARCAR
 # ----------------------------
-else:
+elif modo == "Marcar Asistencia":
 
-    st.subheader("📸 Registro de Jornada")
+    st.subheader("📸 Escanear QR")
 
-    empleados = c.execute("SELECT * FROM empleados").fetchall()
+    foto_qr = st.camera_input("Escanea el QR")
 
-    if not empleados:
-        st.warning("No hay empleados registrados")
-    else:
-        nombres = [emp[1] for emp in empleados]
+    if foto_qr:
+        img = Image.open(foto_qr)
+        img_np = np.array(img)
 
-        nombre_sel = st.selectbox("Selecciona tu nombre", nombres)
-        tipo = st.radio("Tipo", ["Entrada", "Salida"])
+        detector = cv2.QRCodeDetector()
+        data, bbox, _ = detector.detectAndDecode(img_np)
 
-        foto = st.camera_input("Tomar foto")
+        if data:
+            emp_id = data
+            empleado = c.execute("SELECT * FROM empleados WHERE id=?", (emp_id,)).fetchone()
 
-        if foto:
-            st.info("Procesando...")
+            if empleado:
+                st.success(f"Empleado: {empleado[1]}")
 
-            img = Image.open(foto)
-            img_np = np.array(img)
+                tipo = st.radio("Tipo", ["Entrada", "Salida"])
+                foto = st.camera_input("📸 Foto obligatoria")
 
-            empleado_data = next(emp for emp in empleados if emp[1] == nombre_sel)
+                if foto:
+                    img_foto = Image.open(foto)
+                    img_np2 = np.array(img_foto)
 
-            verificado, distancia = verificar_rostro(empleado_data[2], img_np)
+                    foto_path = f"fotos_registros/{uuid.uuid4()}.jpg"
+                    cv2.imwrite(foto_path, img_np2)
 
-            st.write(f"🔍 Distancia: {round(distancia, 3)}")
+                    ahora = datetime.now()
+                    fecha = ahora.strftime('%d-%m-%Y')
+                    hora = ahora.strftime('%H:%M')
 
-            if verificado:
-                ahora = datetime.now()
+                    # guardar local
+                    c.execute('''
+                        INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo, foto)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (
+                        emp_id,
+                        empleado[1],
+                        fecha,
+                        hora,
+                        tipo,
+                        foto_path
+                    ))
+                    conn.commit()
 
-                st.success(f"✅ Bienvenido {nombre_sel}")
-                st.write(f"{tipo} a las {ahora.strftime('%H:%M:%S')}")
+                    # guardar en Google Sheets
+                    guardar_en_sheets(empleado[1], fecha, hora, tipo)
 
-                c.execute('''
-                    INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (
-                    empleado_data[0],
-                    nombre_sel,
-                    ahora.strftime('%d/%m/%Y'),
-                    ahora.strftime('%H:%M'),
-                    tipo
-                ))
+                    st.success("✅ Registro guardado + enviado a Google Sheets")
 
-                conn.commit()
             else:
-                st.error("❌ Rostro no coincide")
+                st.error("Empleado no encontrado")
+        else:
+            st.error("No se detectó QR")
 
 # ----------------------------
-# HISTORIAL
+# AUDITORÍA
 # ----------------------------
-st.divider()
-st.subheader("📊 Registros")
-
-registros = c.execute("SELECT * FROM registros ORDER BY id DESC").fetchall()
-
-if registros:
-    import pandas as pd
-
-    df = pd.DataFrame(registros, columns=[
-        "ID", "Empleado ID", "Nombre", "Fecha", "Hora", "Tipo"
-    ])
-
-    st.dataframe(df)
 else:
-    st.info("Sin registros")
+
+    st.subheader("🧾 Auditoría")
+
+    registros = c.execute("SELECT * FROM registros ORDER BY id DESC").fetchall()
+
+    if registros:
+        df = pd.DataFrame(registros, columns=[
+            "ID", "Empleado ID", "Nombre", "Fecha", "Hora", "Tipo", "Foto"
+        ])
+
+        st.dataframe(df.drop(columns=["Foto"]))
+
+        st.divider()
+
+        for _, row in df.head(10).iterrows():
+            st.write(f"{row['Nombre']} - {row['Fecha']} {row['Hora']}")
+            st.image(row["Foto"], width=200)
+    else:
+        st.info("Sin registros")
