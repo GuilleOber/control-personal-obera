@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from datetime import datetime
 from PIL import Image
-import face_recognition
+from deepface import DeepFace
 
 # ----------------------------
 # CONFIG
@@ -50,15 +50,26 @@ if not os.path.exists('fotos_db'):
     os.makedirs('fotos_db')
 
 # ----------------------------
-# FUNCION FACE RECOGNITION
+# FUNCION VERIFICACION (DeepFace)
 # ----------------------------
-def obtener_encoding(imagen):
-    imagen_rgb = cv2.cvtColor(imagen, cv2.COLOR_BGR2RGB)
-    encodings = face_recognition.face_encodings(imagen_rgb)
+def verificar_rostro(img1_path, img2_array):
+    try:
+        # Guardar temporalmente la selfie
+        temp_path = "temp.jpg"
+        cv2.imwrite(temp_path, img2_array)
 
-    if len(encodings) > 0:
-        return encodings[0]
-    return None
+        result = DeepFace.verify(
+            img1_path=img1_path,
+            img2_path=temp_path,
+            enforce_detection=False  # evita errores si no detecta bien
+        )
+
+        os.remove(temp_path)
+
+        return result["verified"], result["distance"]
+
+    except Exception as e:
+        return False, 1.0
 
 # ----------------------------
 # SIDEBAR
@@ -80,7 +91,6 @@ if modo == "Registrar Empleados":
     if st.button("Guardar empleado"):
         if nombre and foto:
             id_emp = str(uuid.uuid4())
-
             ruta = f"fotos_db/{id_emp}.jpg"
 
             img = Image.open(foto)
@@ -102,9 +112,12 @@ if modo == "Registrar Empleados":
 
     empleados = c.execute("SELECT * FROM empleados").fetchall()
 
-    for emp in empleados:
-        st.write(f"👤 {emp[1]}")
-        st.image(emp[2], width=150)
+    if empleados:
+        for emp in empleados:
+            st.write(f"👤 {emp[1]}")
+            st.image(emp[2], width=150)
+    else:
+        st.info("No hay empleados registrados")
 
 # ----------------------------
 # MARCADO
@@ -131,45 +144,32 @@ else:
             img = Image.open(foto)
             img_np = np.array(img)
 
-            encoding_selfie = obtener_encoding(img_np)
+            empleado_data = next(emp for emp in empleados if emp[1] == nombre_sel)
 
-            if encoding_selfie is None:
-                st.error("❌ No se detectó rostro")
+            verificado, distancia = verificar_rostro(empleado_data[2], img_np)
+
+            st.write(f"🔍 Distancia: {round(distancia, 3)}")
+
+            if verificado:
+                ahora = datetime.now()
+
+                st.success(f"✅ Bienvenido {nombre_sel}")
+                st.write(f"{tipo} a las {ahora.strftime('%H:%M:%S')}")
+
+                c.execute('''
+                    INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    empleado_data[0],
+                    nombre_sel,
+                    ahora.strftime('%d/%m/%Y'),
+                    ahora.strftime('%H:%M'),
+                    tipo
+                ))
+
+                conn.commit()
             else:
-                empleado_data = next(emp for emp in empleados if emp[1] == nombre_sel)
-
-                img_ref = cv2.imread(empleado_data[2])
-                encoding_ref = obtener_encoding(img_ref)
-
-                if encoding_ref is None:
-                    st.error("Error en imagen de referencia")
-                else:
-                    resultado = face_recognition.compare_faces(
-                        [encoding_ref],
-                        encoding_selfie,
-                        tolerance=0.5
-                    )[0]
-
-                    if resultado:
-                        ahora = datetime.now()
-
-                        st.success(f"✅ Bienvenido {nombre_sel}")
-                        st.write(f"{tipo} a las {ahora.strftime('%H:%M:%S')}")
-
-                        c.execute('''
-                            INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo)
-                            VALUES (?, ?, ?, ?, ?)
-                        ''', (
-                            empleado_data[0],
-                            nombre_sel,
-                            ahora.strftime('%d/%m/%Y'),
-                            ahora.strftime('%H:%M'),
-                            tipo
-                        ))
-
-                        conn.commit()
-                    else:
-                        st.error("❌ Rostro no coincide")
+                st.error("❌ Rostro no coincide")
 
 # ----------------------------
 # HISTORIAL
