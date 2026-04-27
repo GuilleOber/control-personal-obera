@@ -12,7 +12,7 @@ st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="ce
 st.title("🚀 Centro de Control Cel")
 st.info("Sistema Biométrico de Asistencia")
 
-# Crear carpeta de fotos
+# Crear carpeta
 if not os.path.exists('fotos_db'):
     os.makedirs('fotos_db')
 
@@ -22,33 +22,30 @@ with st.sidebar:
     modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar Nuevo Empleado"])
 
 # ----------------------------
+# FUNCION DE COMPARACIÓN
+# ----------------------------
+def comparar_imagenes(img1, img2):
+    img1 = cv2.resize(img1, (200, 200))
+    img2 = cv2.resize(img2, (200, 200))
+    diff = cv2.absdiff(img1, img2)
+    return np.mean(diff)
+
+# ----------------------------
 # REGISTRAR EMPLEADO
 # ----------------------------
 if modo == "Registrar Nuevo Empleado":
     st.subheader("📝 Alta de Personal")
 
     nuevo_nombre = st.text_input("Nombre del trabajador")
-    foto_perfil = st.file_uploader("Subir foto de referencia", type=['jpg', 'png'])
+    foto_perfil = st.file_uploader("Subir foto", type=['jpg', 'png'])
 
     if st.button("Guardar Empleado"):
         if nuevo_nombre and foto_perfil:
             img = Image.open(foto_perfil).convert('L').resize((200, 200))
             img.save(f"fotos_db/{nuevo_nombre}.jpg")
-            st.success(f"Empleado {nuevo_nombre} registrado")
+            st.success(f"{nuevo_nombre} registrado")
         else:
             st.error("Completa todos los campos")
-
-# ----------------------------
-# FUNCION DE COMPARACIÓN
-# ----------------------------
-def comparar_imagenes(img1, img2):
-    img1 = cv2.resize(img1, (200, 200))
-    img2 = cv2.resize(img2, (200, 200))
-
-    diff = cv2.absdiff(img1, img2)
-    score = np.mean(diff)
-
-    return score
 
 # ----------------------------
 # MARCADO
@@ -69,24 +66,21 @@ else:
         if foto_selfie:
             st.info("Procesando...")
 
-            # Leer selfie
             img_selfie = Image.open(foto_selfie).convert('L')
-            img_selfie_np = np.array(img_selfie)
+            img_np = np.array(img_selfie)
 
-            # Detector de rostro
             face_cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
             )
 
-            faces = face_cascade.detectMultiScale(img_selfie_np, 1.3, 5)
+            faces = face_cascade.detectMultiScale(img_np, 1.3, 5)
 
             if len(faces) == 0:
                 st.error("No se detectó rostro")
             else:
-                (x, y, w, h) = faces[0]
-                rostro = img_selfie_np[y:y+h, x:x+w]
+                x, y, w, h = faces[0]
+                rostro = img_np[y:y+h, x:x+w]
 
-                # Cargar imagen de referencia
                 ref_path = f"fotos_db/{empleado_sel}.jpg"
                 img_ref = cv2.imread(ref_path, 0)
 
@@ -96,9 +90,8 @@ else:
                     ahora = datetime.now()
 
                     st.success(f"✅ Bienvenido {empleado_sel}")
-                    st.write(f"{tipo_marca} registrada a las {ahora.strftime('%H:%M:%S')}")
+                    st.write(f"{tipo_marca} a las {ahora.strftime('%H:%M:%S')}")
 
-                    # Guardar en CSV
                     df_nuevo = pd.DataFrame([{
                         "Nombre": empleado_sel,
                         "Fecha": ahora.strftime('%d/%m/%Y'),
