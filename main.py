@@ -5,11 +5,8 @@ import numpy as np
 import os
 from datetime import datetime
 import pandas as pd
-from streamlit_gsheets import GSheetsConnection
 
-# Conexión Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection)
-
+# Configuración
 st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="centered")
 
 st.title("🚀 Centro de Control Cel")
@@ -42,15 +39,15 @@ if modo == "Registrar Nuevo Empleado":
             st.error("Completa todos los campos")
 
 # ----------------------------
-# FUNCION DE COMPARACIÓN SIMPLE
+# FUNCION DE COMPARACIÓN
 # ----------------------------
 def comparar_imagenes(img1, img2):
     img1 = cv2.resize(img1, (200, 200))
     img2 = cv2.resize(img2, (200, 200))
-    
+
     diff = cv2.absdiff(img1, img2)
     score = np.mean(diff)
-    
+
     return score
 
 # ----------------------------
@@ -76,7 +73,7 @@ else:
             img_selfie = Image.open(foto_selfie).convert('L')
             img_selfie_np = np.array(img_selfie)
 
-            # Detectar rostro
+            # Detector de rostro
             face_cascade = cv2.CascadeClassifier(
                 cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
             )
@@ -86,24 +83,22 @@ else:
             if len(faces) == 0:
                 st.error("No se detectó rostro")
             else:
-                # Recortar rostro
                 (x, y, w, h) = faces[0]
                 rostro = img_selfie_np[y:y+h, x:x+w]
 
-                # Cargar referencia
+                # Cargar imagen de referencia
                 ref_path = f"fotos_db/{empleado_sel}.jpg"
                 img_ref = cv2.imread(ref_path, 0)
 
                 score = comparar_imagenes(rostro, img_ref)
 
-                # Ajustar umbral (más bajo = más estricto)
                 if score < 60:
                     ahora = datetime.now()
 
                     st.success(f"✅ Bienvenido {empleado_sel}")
                     st.write(f"{tipo_marca} registrada a las {ahora.strftime('%H:%M:%S')}")
 
-                    # Guardar en Google Sheets
+                    # Guardar en CSV
                     df_nuevo = pd.DataFrame([{
                         "Nombre": empleado_sel,
                         "Fecha": ahora.strftime('%d/%m/%Y'),
@@ -111,7 +106,29 @@ else:
                         "Tipo": tipo_marca
                     }])
 
-                    conn.create(data=df_nuevo)
+                    archivo = "registros.csv"
+
+                    if os.path.exists(archivo):
+                        df_existente = pd.read_csv(archivo)
+                        df_final = pd.concat([df_existente, df_nuevo], ignore_index=True)
+                    else:
+                        df_final = df_nuevo
+
+                    df_final.to_csv(archivo, index=False)
 
                 else:
                     st.error("❌ Rostro no coincide")
+
+# ----------------------------
+# VER REGISTROS
+# ----------------------------
+st.divider()
+st.subheader("📊 Registros")
+
+archivo = "registros.csv"
+
+if os.path.exists(archivo):
+    df = pd.read_csv(archivo)
+    st.dataframe(df)
+else:
+    st.info("Aún no hay registros")
