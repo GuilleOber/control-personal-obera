@@ -2,11 +2,11 @@ import streamlit as st
 import sqlite3
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import pandas as pd
 import os
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import numpy as np
-import cv2
 import random
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -14,10 +14,20 @@ from oauth2client.service_account import ServiceAccountCredentials
 # ----------------------------
 # CONFIG
 # ----------------------------
-st.set_page_config(page_title="Control Personal PRO", page_icon="👤")
+st.set_page_config(
+    page_title="Control Personal",
+    page_icon="👤",
+    layout="centered"
+)
+
+# ----------------------------
+# HORA ARGENTINA
+# ----------------------------
+def ahora():
+    return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
 st.title("🏢 Control de Personal")
-st.caption("🕒 Hora actual: " + datetime.now().strftime("%H:%M:%S"))
+st.caption(f"🕒 Hora actual: {ahora().strftime('%H:%M:%S')}")
 
 # ----------------------------
 # FRASES
@@ -59,7 +69,7 @@ def guardar_en_sheets(nombre, fecha, hora, tipo):
         ws.append_row([nombre, fecha, hora, tipo])
 
     except Exception as e:
-        st.warning(f"Sheets error: {e}")
+        st.warning(f"Error Sheets: {e}")
 
 # ----------------------------
 # DB
@@ -96,32 +106,65 @@ os.makedirs("fotos_empleados", exist_ok=True)
 os.makedirs("fotos_registros", exist_ok=True)
 
 # ----------------------------
-# SIDEBAR
+# SIDEBAR (default marcar)
 # ----------------------------
 with st.sidebar:
-    modo = st.radio("Menú", ["Empleados", "Marcar Asistencia", "Auditoría"])
+    modo = st.radio(
+        "Menú",
+        ["Empleados", "Marcar Asistencia", "Auditoría"],
+        index=1
+    )
+
+# ----------------------------
+# GEOLOCALIZACIÓN (PWA)
+# ----------------------------
+st.markdown("📍 Verificando ubicación...")
+
+geo = st.text_input("Ubicación (lat,lon)", value="", key="geo", placeholder="Se completa automáticamente")
+
+st.markdown("""
+<script>
+navigator.geolocation.getCurrentPosition(function(pos) {
+    const coords = pos.coords.latitude + "," + pos.coords.longitude;
+    window.parent.document.querySelector('input[data-testid="stTextInput"] input').value = coords;
+}, function(err) {
+    console.log(err);
+});
+</script>
+""", unsafe_allow_html=True)
+
+def validar_geo(valor):
+    try:
+        lat, lon = map(float, valor.split(","))
+
+        # Oberá aprox
+        lat_ref = -27.487
+        lon_ref = -55.119
+
+        if abs(lat - lat_ref) > 0.02 or abs(lon - lon_ref) > 0.02:
+            return False
+        return True
+    except:
+        return False
 
 # ----------------------------
 # EMPLEADOS
 # ----------------------------
 if modo == "Empleados":
 
-    st.subheader("👥 Gestión de Empleados")
+    st.subheader("👥 Empleados")
 
     nombre = st.text_input("Nombre")
     foto = st.file_uploader("Foto base", type=["jpg", "png"])
 
-    if st.button("Guardar empleado"):
+    if st.button("Guardar"):
         if nombre and foto:
             emp_id = str(uuid.uuid4())
             path = f"fotos_empleados/{emp_id}.jpg"
-
-            img = Image.open(foto)
-            img.save(path)
+            Image.open(foto).save(path)
 
             c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (emp_id, nombre, path))
             conn.commit()
-
             st.success("Empleado guardado")
             st.rerun()
 
@@ -130,15 +173,14 @@ if modo == "Empleados":
     empleados = c.execute("SELECT * FROM empleados").fetchall()
 
     for emp in empleados:
-        st.write(f"👤 {emp[1]}")
-        st.image(emp[2], width=120)
+        st.image(emp[2], width=100)
+        nuevo = st.text_input(f"Editar {emp[0]}", value=emp[1])
 
         col1, col2 = st.columns(2)
 
         with col1:
-            nuevo_nombre = st.text_input(f"Editar {emp[0]}", value=emp[1])
             if st.button(f"Actualizar {emp[0]}"):
-                c.execute("UPDATE empleados SET nombre=? WHERE id=?", (nuevo_nombre, emp[0]))
+                c.execute("UPDATE empleados SET nombre=? WHERE id=?", (nuevo, emp[0]))
                 conn.commit()
                 st.rerun()
 
@@ -153,28 +195,31 @@ if modo == "Empleados":
 # ----------------------------
 elif modo == "Marcar Asistencia":
 
-    st.subheader("📸 Registro con Selfie")
+    st.subheader("📸 Registro")
+
+    if not validar_geo(geo):
+        st.error("📍 Debes estar en la ubicación de trabajo para registrar asistencia")
+        st.stop()
 
     empleados = c.execute("SELECT * FROM empleados").fetchall()
 
     if empleados:
-        nombres = [emp[1] for emp in empleados]
-        nombre_sel = st.selectbox("¿Quién sos?", nombres)
+        nombres = [e[1] for e in empleados]
+        nombre_sel = st.selectbox("Selecciona tu nombre", nombres)
 
         tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
-        foto = st.camera_input("Tomar foto")
+        foto = st.camera_input("Tomar selfie")
 
         if foto:
             img = Image.open(foto)
 
-            ahora = datetime.now()
-            fecha = ahora.strftime("%d-%m-%Y")
-            hora = ahora.strftime("%H:%M")
+            ahora_dt = ahora()
+            fecha = ahora_dt.strftime("%d-%m-%Y")
+            hora = ahora_dt.strftime("%H:%M")
 
-            # dibujar texto en imagen
             draw = ImageDraw.Draw(img)
-            texto = f"{nombre_sel} - {fecha} {hora}"
+            texto = f"{nombre_sel} | {fecha} {hora}"
             draw.text((10, 10), texto, fill=(255, 0, 0))
 
             path = f"fotos_registros/{uuid.uuid4()}.jpg"
@@ -202,7 +247,7 @@ elif modo == "Marcar Asistencia":
 # ----------------------------
 else:
 
-    st.subheader("🧾 Auditoría")
+    st.subheader("📊 Auditoría")
 
     registros = c.execute("SELECT * FROM registros ORDER BY id DESC").fetchall()
 
@@ -213,10 +258,7 @@ else:
 
         st.dataframe(df.drop(columns=["Foto"]))
 
-        st.divider()
-
         for _, row in df.head(10).iterrows():
-            st.write(f"{row['Nombre']} - {row['Fecha']} {row['Hora']}")
             st.image(row["Foto"], width=200)
     else:
         st.info("Sin registros")
