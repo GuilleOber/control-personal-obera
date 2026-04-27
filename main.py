@@ -6,34 +6,43 @@ import os
 from datetime import datetime
 import pandas as pd
 
-# Configuración
+# ----------------------------
+# CONFIG
+# ----------------------------
 st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="centered")
 
 st.title("🚀 Centro de Control Cel")
 st.info("Sistema Biométrico de Asistencia")
 
-# Crear carpeta
+# Crear carpeta si no existe
 if not os.path.exists('fotos_db'):
     os.makedirs('fotos_db')
 
-# Sidebar
+# ----------------------------
+# FUNCION COMPARACION
+# ----------------------------
+def comparar_imagenes(img1, img2):
+    img1 = cv2.resize(img1, (200, 200))
+    img2 = cv2.resize(img2, (200, 200))
+
+    img1 = cv2.equalizeHist(img1)
+    img2 = cv2.equalizeHist(img2)
+
+    diff = cv2.absdiff(img1, img2)
+    return np.mean(diff)
+
+# ----------------------------
+# SIDEBAR
+# ----------------------------
 with st.sidebar:
     st.header("⚙️ Administración")
     modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar Nuevo Empleado"])
 
 # ----------------------------
-# FUNCION DE COMPARACIÓN
-# ----------------------------
-def comparar_imagenes(img1, img2):
-    img1 = cv2.resize(img1, (200, 200))
-    img2 = cv2.resize(img2, (200, 200))
-    diff = cv2.absdiff(img1, img2)
-    return np.mean(diff)
-
-# ----------------------------
 # REGISTRAR EMPLEADO
 # ----------------------------
 if modo == "Registrar Nuevo Empleado":
+
     st.subheader("📝 Alta de Personal")
 
     nuevo_nombre = st.text_input("Nombre del trabajador")
@@ -41,19 +50,42 @@ if modo == "Registrar Nuevo Empleado":
 
     if st.button("Guardar Empleado"):
         if nuevo_nombre and foto_perfil:
+
+            ruta = f"fotos_db/{nuevo_nombre}.jpg"
+
             img = Image.open(foto_perfil).convert('L').resize((200, 200))
-            img.save(f"fotos_db/{nuevo_nombre}.jpg")
-            st.success(f"{nuevo_nombre} registrado")
+            img.save(ruta)
+
+            # Verificación
+            if os.path.exists(ruta):
+                st.success(f"✅ {nuevo_nombre} registrado correctamente")
+                st.rerun()
+            else:
+                st.error("❌ Error al guardar la imagen")
+
         else:
             st.error("Completa todos los campos")
+
+    # Mostrar empleados actuales
+    st.divider()
+    st.subheader("👥 Empleados registrados")
+
+    archivos = [f for f in os.listdir("fotos_db") if f.endswith(".jpg")]
+
+    if archivos:
+        nombres = [f.split('.')[0] for f in archivos]
+        st.write(nombres)
+    else:
+        st.info("Aún no hay empleados")
 
 # ----------------------------
 # MARCADO
 # ----------------------------
 else:
+
     st.subheader("📸 Registro de Jornada")
 
-    empleados = [f.split('.')[0] for f in os.listdir('fotos_db')]
+    empleados = [f.split('.')[0] for f in os.listdir('fotos_db') if f.endswith('.jpg')]
 
     if not empleados:
         st.warning("No hay empleados registrados")
@@ -76,7 +108,7 @@ else:
             faces = face_cascade.detectMultiScale(img_np, 1.3, 5)
 
             if len(faces) == 0:
-                st.error("No se detectó rostro")
+                st.error("❌ No se detectó rostro")
             else:
                 x, y, w, h = faces[0]
                 rostro = img_np[y:y+h, x:x+w]
@@ -86,11 +118,11 @@ else:
 
                 score = comparar_imagenes(rostro, img_ref)
 
-                if score < 60:
+                if score < 50:
                     ahora = datetime.now()
 
                     st.success(f"✅ Bienvenido {empleado_sel}")
-                    st.write(f"{tipo_marca} a las {ahora.strftime('%H:%M:%S')}")
+                    st.write(f"{tipo_marca} registrada a las {ahora.strftime('%H:%M:%S')}")
 
                     df_nuevo = pd.DataFrame([{
                         "Nombre": empleado_sel,
@@ -113,7 +145,7 @@ else:
                     st.error("❌ Rostro no coincide")
 
 # ----------------------------
-# VER REGISTROS
+# HISTORIAL
 # ----------------------------
 st.divider()
 st.subheader("📊 Registros")
