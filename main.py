@@ -1,10 +1,12 @@
 import streamlit as st
 import cv2
-from PIL import Image
 import numpy as np
 import os
+import sqlite3
+import uuid
 from datetime import datetime
-import pandas as pd
+from PIL import Image
+import face_recognition
 
 # ----------------------------
 # CONFIG
@@ -14,89 +16,95 @@ st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="ce
 st.title("🚀 Centro de Control Cel")
 st.info("Sistema Biométrico de Asistencia")
 
-# Crear carpeta
+# ----------------------------
+# DB
+# ----------------------------
+conn = sqlite3.connect("data.db", check_same_thread=False)
+c = conn.cursor()
+
+c.execute('''
+CREATE TABLE IF NOT EXISTS empleados (
+    id TEXT PRIMARY KEY,
+    nombre TEXT,
+    foto TEXT
+)
+''')
+
+c.execute('''
+CREATE TABLE IF NOT EXISTS registros (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    empleado_id TEXT,
+    nombre TEXT,
+    fecha TEXT,
+    hora TEXT,
+    tipo TEXT
+)
+''')
+
+conn.commit()
+
+# ----------------------------
+# CARPETA
+# ----------------------------
 if not os.path.exists('fotos_db'):
     os.makedirs('fotos_db')
 
 # ----------------------------
-# FUNCION MEJORADA
+# FUNCION FACE RECOGNITION
 # ----------------------------
-def comparar_imagenes(img1, img2):
-    img1 = cv2.resize(img1, (200, 200))
-    img2 = cv2.resize(img2, (200, 200))
+def obtener_encoding(imagen):
+    imagen_rgb = cv2.cvtColor(imagen, cv2.COLOR_BGR2RGB)
+    encodings = face_recognition.face_encodings(imagen_rgb)
 
-    img1 = cv2.GaussianBlur(img1, (5,5), 0)
-    img2 = cv2.GaussianBlur(img2, (5,5), 0)
-
-    score = cv2.matchTemplate(img1, img2, cv2.TM_CCOEFF_NORMED)[0][0]
-    return score
+    if len(encodings) > 0:
+        return encodings[0]
+    return None
 
 # ----------------------------
 # SIDEBAR
 # ----------------------------
 with st.sidebar:
     st.header("⚙️ Administración")
-    modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar / Editar Empleados"])
+    modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar Empleados"])
 
 # ----------------------------
-# GESTIÓN DE EMPLEADOS
+# REGISTRO DE EMPLEADOS
 # ----------------------------
-if modo == "Registrar / Editar Empleados":
+if modo == "Registrar Empleados":
 
     st.subheader("👥 Gestión de Empleados")
 
-    # -------- REGISTRAR --------
-    st.markdown("### ➕ Nuevo empleado")
-    nuevo_nombre = st.text_input("Nombre")
-    foto_perfil = st.file_uploader("Foto", type=['jpg', 'png'])
+    nombre = st.text_input("Nombre")
+    foto = st.file_uploader("Foto", type=['jpg', 'png'])
 
     if st.button("Guardar empleado"):
-        if nuevo_nombre and foto_perfil:
-            ruta = f"fotos_db/{nuevo_nombre}.jpg"
-            img = Image.open(foto_perfil).convert('L').resize((200, 200))
-            img.save(ruta)
+        if nombre and foto:
+            id_emp = str(uuid.uuid4())
 
-            if os.path.exists(ruta):
-                st.success("Empleado guardado")
-                st.rerun()
-            else:
-                st.error("Error al guardar")
+            ruta = f"fotos_db/{id_emp}.jpg"
+
+            img = Image.open(foto)
+            img = np.array(img)
+
+            cv2.imwrite(ruta, img)
+
+            c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (id_emp, nombre, ruta))
+            conn.commit()
+
+            st.success("Empleado guardado correctamente")
+            st.rerun()
         else:
             st.error("Completa todos los campos")
 
     st.divider()
 
-    # -------- LISTA --------
-    archivos = [f for f in os.listdir("fotos_db") if f.endswith(".jpg")]
+    st.subheader("📋 Empleados registrados")
 
-    if archivos:
-        nombres = [f.split('.')[0] for f in archivos]
+    empleados = c.execute("SELECT * FROM empleados").fetchall()
 
-        st.markdown("### ✏️ Editar / Eliminar")
-
-        empleado_sel = st.selectbox("Empleado", nombres)
-
-        # EDITAR
-        nuevo_nombre_edit = st.text_input("Nuevo nombre", value=empleado_sel)
-
-        if st.button("Actualizar nombre"):
-            if nuevo_nombre_edit:
-                old_path = f"fotos_db/{empleado_sel}.jpg"
-                new_path = f"fotos_db/{nuevo_nombre_edit}.jpg"
-
-                os.rename(old_path, new_path)
-                st.success("Nombre actualizado")
-                st.rerun()
-
-        # BORRAR
-        if st.button("Eliminar empleado"):
-            path = f"fotos_db/{empleado_sel}.jpg"
-            os.remove(path)
-            st.warning("Empleado eliminado")
-            st.rerun()
-
-    else:
-        st.info("No hay empleados registrados")
+    for emp in empleados:
+        st.write(f"👤 {emp[1]}")
+        st.image(emp[2], width=150)
 
 # ----------------------------
 # MARCADO
@@ -105,66 +113,63 @@ else:
 
     st.subheader("📸 Registro de Jornada")
 
-    empleados = [f.split('.')[0] for f in os.listdir('fotos_db') if f.endswith('.jpg')]
+    empleados = c.execute("SELECT * FROM empleados").fetchall()
 
     if not empleados:
-        st.warning("No hay empleados")
+        st.warning("No hay empleados registrados")
     else:
-        empleado_sel = st.selectbox("Selecciona tu nombre", empleados)
-        tipo_marca = st.radio("Tipo", ["Entrada", "Salida"])
+        nombres = [emp[1] for emp in empleados]
 
-        foto_selfie = st.camera_input("Tomar foto")
+        nombre_sel = st.selectbox("Selecciona tu nombre", nombres)
+        tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
-        if foto_selfie:
+        foto = st.camera_input("Tomar foto")
+
+        if foto:
             st.info("Procesando...")
 
-            img_selfie = Image.open(foto_selfie).convert('L')
-            img_np = np.array(img_selfie)
+            img = Image.open(foto)
+            img_np = np.array(img)
 
-            face_cascade = cv2.CascadeClassifier(
-                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            )
+            encoding_selfie = obtener_encoding(img_np)
 
-            faces = face_cascade.detectMultiScale(img_np, 1.3, 5)
-
-            if len(faces) == 0:
+            if encoding_selfie is None:
                 st.error("❌ No se detectó rostro")
             else:
-                x, y, w, h = faces[0]
-                rostro = img_np[y:y+h, x:x+w]
+                empleado_data = next(emp for emp in empleados if emp[1] == nombre_sel)
 
-                ref_path = f"fotos_db/{empleado_sel}.jpg"
-                img_ref = cv2.imread(ref_path, 0)
+                img_ref = cv2.imread(empleado_data[2])
+                encoding_ref = obtener_encoding(img_ref)
 
-                score = comparar_imagenes(rostro, img_ref)
-
-                st.write(f"🔍 Similitud: {round(score,2)}")
-
-                if score > 0.5:
-                    ahora = datetime.now()
-
-                    st.success(f"✅ Bienvenido {empleado_sel}")
-                    st.write(f"{tipo_marca} a las {ahora.strftime('%H:%M:%S')}")
-
-                    df_nuevo = pd.DataFrame([{
-                        "Nombre": empleado_sel,
-                        "Fecha": ahora.strftime('%d/%m/%Y'),
-                        "Hora": ahora.strftime('%H:%M'),
-                        "Tipo": tipo_marca
-                    }])
-
-                    archivo = "registros.csv"
-
-                    if os.path.exists(archivo):
-                        df_existente = pd.read_csv(archivo)
-                        df_final = pd.concat([df_existente, df_nuevo], ignore_index=True)
-                    else:
-                        df_final = df_nuevo
-
-                    df_final.to_csv(archivo, index=False)
-
+                if encoding_ref is None:
+                    st.error("Error en imagen de referencia")
                 else:
-                    st.error("❌ Rostro no coincide")
+                    resultado = face_recognition.compare_faces(
+                        [encoding_ref],
+                        encoding_selfie,
+                        tolerance=0.5
+                    )[0]
+
+                    if resultado:
+                        ahora = datetime.now()
+
+                        st.success(f"✅ Bienvenido {nombre_sel}")
+                        st.write(f"{tipo} a las {ahora.strftime('%H:%M:%S')}")
+
+                        c.execute('''
+                            INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (
+                            empleado_data[0],
+                            nombre_sel,
+                            ahora.strftime('%d/%m/%Y'),
+                            ahora.strftime('%H:%M'),
+                            tipo
+                        ))
+
+                        conn.commit()
+                    else:
+                        st.error("❌ Rostro no coincide")
 
 # ----------------------------
 # HISTORIAL
@@ -172,10 +177,15 @@ else:
 st.divider()
 st.subheader("📊 Registros")
 
-archivo = "registros.csv"
+registros = c.execute("SELECT * FROM registros ORDER BY id DESC").fetchall()
 
-if os.path.exists(archivo):
-    df = pd.read_csv(archivo)
+if registros:
+    import pandas as pd
+
+    df = pd.DataFrame(registros, columns=[
+        "ID", "Empleado ID", "Nombre", "Fecha", "Hora", "Tipo"
+    ])
+
     st.dataframe(df)
 else:
     st.info("Sin registros")
