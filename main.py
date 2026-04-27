@@ -14,69 +14,89 @@ st.set_page_config(page_title="Control Oberá Cel", page_icon="👤", layout="ce
 st.title("🚀 Centro de Control Cel")
 st.info("Sistema Biométrico de Asistencia")
 
-# Crear carpeta si no existe
+# Crear carpeta
 if not os.path.exists('fotos_db'):
     os.makedirs('fotos_db')
 
 # ----------------------------
-# FUNCION COMPARACION
+# FUNCION MEJORADA
 # ----------------------------
 def comparar_imagenes(img1, img2):
     img1 = cv2.resize(img1, (200, 200))
     img2 = cv2.resize(img2, (200, 200))
 
-    img1 = cv2.equalizeHist(img1)
-    img2 = cv2.equalizeHist(img2)
+    img1 = cv2.GaussianBlur(img1, (5,5), 0)
+    img2 = cv2.GaussianBlur(img2, (5,5), 0)
 
-    diff = cv2.absdiff(img1, img2)
-    return np.mean(diff)
+    score = cv2.matchTemplate(img1, img2, cv2.TM_CCOEFF_NORMED)[0][0]
+    return score
 
 # ----------------------------
 # SIDEBAR
 # ----------------------------
 with st.sidebar:
     st.header("⚙️ Administración")
-    modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar Nuevo Empleado"])
+    modo = st.radio("Ir a:", ["Marcado de Asistencia", "Registrar / Editar Empleados"])
 
 # ----------------------------
-# REGISTRAR EMPLEADO
+# GESTIÓN DE EMPLEADOS
 # ----------------------------
-if modo == "Registrar Nuevo Empleado":
+if modo == "Registrar / Editar Empleados":
 
-    st.subheader("📝 Alta de Personal")
+    st.subheader("👥 Gestión de Empleados")
 
-    nuevo_nombre = st.text_input("Nombre del trabajador")
-    foto_perfil = st.file_uploader("Subir foto", type=['jpg', 'png'])
+    # -------- REGISTRAR --------
+    st.markdown("### ➕ Nuevo empleado")
+    nuevo_nombre = st.text_input("Nombre")
+    foto_perfil = st.file_uploader("Foto", type=['jpg', 'png'])
 
-    if st.button("Guardar Empleado"):
+    if st.button("Guardar empleado"):
         if nuevo_nombre and foto_perfil:
-
             ruta = f"fotos_db/{nuevo_nombre}.jpg"
-
             img = Image.open(foto_perfil).convert('L').resize((200, 200))
             img.save(ruta)
 
-            # Verificación
             if os.path.exists(ruta):
-                st.success(f"✅ {nuevo_nombre} registrado correctamente")
+                st.success("Empleado guardado")
                 st.rerun()
             else:
-                st.error("❌ Error al guardar la imagen")
-
+                st.error("Error al guardar")
         else:
             st.error("Completa todos los campos")
 
-    # Mostrar empleados actuales
     st.divider()
-    st.subheader("👥 Empleados registrados")
 
+    # -------- LISTA --------
     archivos = [f for f in os.listdir("fotos_db") if f.endswith(".jpg")]
 
     if archivos:
         nombres = [f.split('.')[0] for f in archivos]
-        st.write(nombres)
+
+        st.markdown("### ✏️ Editar / Eliminar")
+
+        empleado_sel = st.selectbox("Empleado", nombres)
+
+        # EDITAR
+        nuevo_nombre_edit = st.text_input("Nuevo nombre", value=empleado_sel)
+
+        if st.button("Actualizar nombre"):
+            if nuevo_nombre_edit:
+                old_path = f"fotos_db/{empleado_sel}.jpg"
+                new_path = f"fotos_db/{nuevo_nombre_edit}.jpg"
+
+                os.rename(old_path, new_path)
+                st.success("Nombre actualizado")
+                st.rerun()
+
+        # BORRAR
+        if st.button("Eliminar empleado"):
+            path = f"fotos_db/{empleado_sel}.jpg"
+            os.remove(path)
+            st.warning("Empleado eliminado")
+            st.rerun()
+
     else:
-        st.info("Aún no hay empleados")
+        st.info("No hay empleados registrados")
 
 # ----------------------------
 # MARCADO
@@ -88,12 +108,12 @@ else:
     empleados = [f.split('.')[0] for f in os.listdir('fotos_db') if f.endswith('.jpg')]
 
     if not empleados:
-        st.warning("No hay empleados registrados")
+        st.warning("No hay empleados")
     else:
         empleado_sel = st.selectbox("Selecciona tu nombre", empleados)
         tipo_marca = st.radio("Tipo", ["Entrada", "Salida"])
 
-        foto_selfie = st.camera_input("Tómate una foto")
+        foto_selfie = st.camera_input("Tomar foto")
 
         if foto_selfie:
             st.info("Procesando...")
@@ -118,11 +138,13 @@ else:
 
                 score = comparar_imagenes(rostro, img_ref)
 
-                if score < 50:
+                st.write(f"🔍 Similitud: {round(score,2)}")
+
+                if score > 0.5:
                     ahora = datetime.now()
 
                     st.success(f"✅ Bienvenido {empleado_sel}")
-                    st.write(f"{tipo_marca} registrada a las {ahora.strftime('%H:%M:%S')}")
+                    st.write(f"{tipo_marca} a las {ahora.strftime('%H:%M:%S')}")
 
                     df_nuevo = pd.DataFrame([{
                         "Nombre": empleado_sel,
@@ -156,4 +178,4 @@ if os.path.exists(archivo):
     df = pd.read_csv(archivo)
     st.dataframe(df)
 else:
-    st.info("Aún no hay registros")
+    st.info("Sin registros")
