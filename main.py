@@ -3,11 +3,11 @@ import sqlite3
 import uuid
 from datetime import datetime
 import pandas as pd
-import qrcode
 import os
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import cv2
+import random
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -16,8 +16,19 @@ from oauth2client.service_account import ServiceAccountCredentials
 # ----------------------------
 st.set_page_config(page_title="Control Personal PRO", page_icon="👤")
 
-st.title("🏢 Control de Personal PRO")
-st.info("QR + Foto + Auditoría + Reportes")
+st.title("🏢 Control de Personal")
+st.caption("🕒 Hora actual: " + datetime.now().strftime("%H:%M:%S"))
+
+# ----------------------------
+# FRASES
+# ----------------------------
+frases = [
+    "El trabajo en equipo hace que el sueño funcione.",
+    "Juntos logramos más.",
+    "La unión hace la fuerza.",
+    "Nadie es tan bueno como todos juntos.",
+    "El éxito es mejor cuando se comparte."
+]
 
 # ----------------------------
 # GOOGLE SHEETS
@@ -29,19 +40,14 @@ def conectar_sheets():
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
     ]
-
-    creds = ServiceAccountCredentials.from_json_keyfile_name(
-        "credentials.json", scope
-    )
-
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_ID)
 
 def guardar_en_sheets(nombre, fecha, hora, tipo):
     try:
         sheet = conectar_sheets()
-
-        # hoja del día
         hoja_nombre = fecha
 
         try:
@@ -53,7 +59,7 @@ def guardar_en_sheets(nombre, fecha, hora, tipo):
         ws.append_row([nombre, fecha, hora, tipo])
 
     except Exception as e:
-        st.warning(f"Error Google Sheets: {e}")
+        st.warning(f"Sheets error: {e}")
 
 # ----------------------------
 # DB
@@ -65,7 +71,7 @@ c.execute('''
 CREATE TABLE IF NOT EXISTS empleados (
     id TEXT PRIMARY KEY,
     nombre TEXT,
-    qr TEXT
+    foto TEXT
 )
 ''')
 
@@ -86,98 +92,110 @@ conn.commit()
 # ----------------------------
 # CARPETAS
 # ----------------------------
-os.makedirs("qr_codes", exist_ok=True)
+os.makedirs("fotos_empleados", exist_ok=True)
 os.makedirs("fotos_registros", exist_ok=True)
 
 # ----------------------------
 # SIDEBAR
 # ----------------------------
 with st.sidebar:
-    modo = st.radio("Menú", ["Registrar Empleado", "Marcar Asistencia", "Auditoría"])
+    modo = st.radio("Menú", ["Empleados", "Marcar Asistencia", "Auditoría"])
 
 # ----------------------------
-# REGISTRO EMPLEADO
+# EMPLEADOS
 # ----------------------------
-if modo == "Registrar Empleado":
+if modo == "Empleados":
 
-    st.subheader("➕ Nuevo Empleado")
+    st.subheader("👥 Gestión de Empleados")
 
     nombre = st.text_input("Nombre")
+    foto = st.file_uploader("Foto base", type=["jpg", "png"])
 
-    if st.button("Crear empleado"):
-        if nombre:
+    if st.button("Guardar empleado"):
+        if nombre and foto:
             emp_id = str(uuid.uuid4())
+            path = f"fotos_empleados/{emp_id}.jpg"
 
-            qr_img = qrcode.make(emp_id)
-            qr_path = f"qr_codes/{emp_id}.png"
-            qr_img.save(qr_path)
+            img = Image.open(foto)
+            img.save(path)
 
-            c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (emp_id, nombre, qr_path))
+            c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (emp_id, nombre, path))
             conn.commit()
 
-            st.success("Empleado creado")
-            st.image(qr_path)
+            st.success("Empleado guardado")
+            st.rerun()
+
+    st.divider()
+
+    empleados = c.execute("SELECT * FROM empleados").fetchall()
+
+    for emp in empleados:
+        st.write(f"👤 {emp[1]}")
+        st.image(emp[2], width=120)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            nuevo_nombre = st.text_input(f"Editar {emp[0]}", value=emp[1])
+            if st.button(f"Actualizar {emp[0]}"):
+                c.execute("UPDATE empleados SET nombre=? WHERE id=?", (nuevo_nombre, emp[0]))
+                conn.commit()
+                st.rerun()
+
+        with col2:
+            if st.button(f"Eliminar {emp[0]}"):
+                c.execute("DELETE FROM empleados WHERE id=?", (emp[0],))
+                conn.commit()
+                st.rerun()
 
 # ----------------------------
 # MARCAR
 # ----------------------------
 elif modo == "Marcar Asistencia":
 
-    st.subheader("📸 Escanear QR")
+    st.subheader("📸 Registro con Selfie")
 
-    foto_qr = st.camera_input("Escanea el QR")
+    empleados = c.execute("SELECT * FROM empleados").fetchall()
 
-    if foto_qr:
-        img = Image.open(foto_qr)
-        img_np = np.array(img)
+    if empleados:
+        nombres = [emp[1] for emp in empleados]
+        nombre_sel = st.selectbox("¿Quién sos?", nombres)
 
-        detector = cv2.QRCodeDetector()
-        data, bbox, _ = detector.detectAndDecode(img_np)
+        tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
-        if data:
-            emp_id = data
-            empleado = c.execute("SELECT * FROM empleados WHERE id=?", (emp_id,)).fetchone()
+        foto = st.camera_input("Tomar foto")
 
-            if empleado:
-                st.success(f"Empleado: {empleado[1]}")
+        if foto:
+            img = Image.open(foto)
 
-                tipo = st.radio("Tipo", ["Entrada", "Salida"])
-                foto = st.camera_input("📸 Foto obligatoria")
+            ahora = datetime.now()
+            fecha = ahora.strftime("%d-%m-%Y")
+            hora = ahora.strftime("%H:%M")
 
-                if foto:
-                    img_foto = Image.open(foto)
-                    img_np2 = np.array(img_foto)
+            # dibujar texto en imagen
+            draw = ImageDraw.Draw(img)
+            texto = f"{nombre_sel} - {fecha} {hora}"
+            draw.text((10, 10), texto, fill=(255, 0, 0))
 
-                    foto_path = f"fotos_registros/{uuid.uuid4()}.jpg"
-                    cv2.imwrite(foto_path, img_np2)
+            path = f"fotos_registros/{uuid.uuid4()}.jpg"
+            img.save(path)
 
-                    ahora = datetime.now()
-                    fecha = ahora.strftime('%d-%m-%Y')
-                    hora = ahora.strftime('%H:%M')
+            emp = next(e for e in empleados if e[1] == nombre_sel)
 
-                    # guardar local
-                    c.execute('''
-                        INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo, foto)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (
-                        emp_id,
-                        empleado[1],
-                        fecha,
-                        hora,
-                        tipo,
-                        foto_path
-                    ))
-                    conn.commit()
+            c.execute('''
+                INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo, foto)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (emp[0], nombre_sel, fecha, hora, tipo, path))
 
-                    # guardar en Google Sheets
-                    guardar_en_sheets(empleado[1], fecha, hora, tipo)
+            conn.commit()
 
-                    st.success("✅ Registro guardado + enviado a Google Sheets")
+            guardar_en_sheets(nombre_sel, fecha, hora, tipo)
 
-            else:
-                st.error("Empleado no encontrado")
-        else:
-            st.error("No se detectó QR")
+            frase = random.choice(frases)
+
+            st.success(f"✅ Bienvenido {nombre_sel}")
+            st.info(frase)
+            st.image(path)
 
 # ----------------------------
 # AUDITORÍA
