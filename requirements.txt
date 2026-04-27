@@ -3,5 +3,4 @@ opencv-python-headless
 numpy
 pandas
 Pillow
-deepface
-tensorflow-cpu
+qrcode
