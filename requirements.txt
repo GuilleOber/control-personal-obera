@@ -6,3 +6,7 @@ Pillow
 gspread
 oauth2client
 streamlit-js-eval
+streamlit
+pillow
+requests
+beautifulsoup4
