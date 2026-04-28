@@ -111,8 +111,8 @@ def distancia_metros(lat1, lon1, lat2, lon2):
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 # Coordenadas base (Oberá)
-LAT_REF = -27.487
-LON_REF = -55.119
+LAT_REF = -27.487735745039803
+LON_REF = -55.126748202517426
 RADIO_METROS = 100
 
 # ----------------------------
