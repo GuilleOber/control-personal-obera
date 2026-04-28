@@ -6,23 +6,17 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import os
 from PIL import Image, ImageDraw
-import numpy as np
 import random
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from streamlit_js_eval import streamlit_js_eval
+import math
 
 # ----------------------------
 # CONFIG
 # ----------------------------
-st.set_page_config(
-    page_title="Control Personal",
-    page_icon="👤",
-    layout="centered"
-)
+st.set_page_config(page_title="Control Personal", page_icon="👤", layout="centered")
 
-# ----------------------------
-# HORA ARGENTINA
-# ----------------------------
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
@@ -50,24 +44,22 @@ def conectar_sheets():
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
     ]
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(
+        st.secrets["gcp_service_account"], scope
+    )
     client = gspread.authorize(creds)
     return client.open_by_key(SHEET_ID)
 
 def guardar_en_sheets(nombre, fecha, hora, tipo):
     try:
         sheet = conectar_sheets()
-        hoja_nombre = fecha
-
         try:
-            ws = sheet.worksheet(hoja_nombre)
+            ws = sheet.worksheet(fecha)
         except:
-            ws = sheet.add_worksheet(title=hoja_nombre, rows="1000", cols="10")
+            ws = sheet.add_worksheet(title=fecha, rows="1000", cols="10")
             ws.append_row(["Nombre", "Fecha", "Hora", "Tipo"])
 
         ws.append_row([nombre, fecha, hora, tipo])
-
     except Exception as e:
         st.warning(f"Error Sheets: {e}")
 
@@ -77,16 +69,8 @@ def guardar_en_sheets(nombre, fecha, hora, tipo):
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
-c.execute('''
-CREATE TABLE IF NOT EXISTS empleados (
-    id TEXT PRIMARY KEY,
-    nombre TEXT,
-    foto TEXT
-)
-''')
-
-c.execute('''
-CREATE TABLE IF NOT EXISTS registros (
+c.execute('''CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT, foto TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS registros (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     empleado_id TEXT,
     nombre TEXT,
@@ -94,58 +78,47 @@ CREATE TABLE IF NOT EXISTS registros (
     hora TEXT,
     tipo TEXT,
     foto TEXT
-)
-''')
-
+)''')
 conn.commit()
 
-# ----------------------------
-# CARPETAS
-# ----------------------------
 os.makedirs("fotos_empleados", exist_ok=True)
 os.makedirs("fotos_registros", exist_ok=True)
 
 # ----------------------------
-# SIDEBAR (default marcar)
+# GEO (100 metros)
 # ----------------------------
-with st.sidebar:
-    modo = st.radio(
-        "Menú",
-        ["Empleados", "Marcar Asistencia", "Auditoría"],
-        index=1
+def obtener_coords():
+    return streamlit_js_eval(
+        js_expressions="""
+        new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => resolve([pos.coords.latitude, pos.coords.longitude]),
+                (err) => reject(err)
+            );
+        })
+        """,
+        key="geo"
     )
 
+def distancia_metros(lat1, lon1, lat2, lon2):
+    R = 6371000
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+# Coordenadas base (Oberá)
+LAT_REF = -27.487
+LON_REF = -55.119
+RADIO_METROS = 100
+
 # ----------------------------
-# GEOLOCALIZACIÓN (PWA)
+# MENU
 # ----------------------------
-st.markdown("📍 Verificando ubicación...")
-
-geo = st.text_input("Ubicación (lat,lon)", value="", key="geo", placeholder="Se completa automáticamente")
-
-st.markdown("""
-<script>
-navigator.geolocation.getCurrentPosition(function(pos) {
-    const coords = pos.coords.latitude + "," + pos.coords.longitude;
-    window.parent.document.querySelector('input[data-testid="stTextInput"] input').value = coords;
-}, function(err) {
-    console.log(err);
-});
-</script>
-""", unsafe_allow_html=True)
-
-def validar_geo(valor):
-    try:
-        lat, lon = map(float, valor.split(","))
-
-        # Oberá aprox
-        lat_ref = -27.487
-        lon_ref = -55.119
-
-        if abs(lat - lat_ref) > 0.02 or abs(lon - lon_ref) > 0.02:
-            return False
-        return True
-    except:
-        return False
+modo = st.sidebar.radio("Menú", ["Empleados", "Marcar Asistencia", "Auditoría"], index=1)
 
 # ----------------------------
 # EMPLEADOS
@@ -155,7 +128,7 @@ if modo == "Empleados":
     st.subheader("👥 Empleados")
 
     nombre = st.text_input("Nombre")
-    foto = st.file_uploader("Foto base", type=["jpg", "png"])
+    foto = st.file_uploader("Foto base")
 
     if st.button("Guardar"):
         if nombre and foto:
@@ -165,10 +138,8 @@ if modo == "Empleados":
 
             c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (emp_id, nombre, path))
             conn.commit()
-            st.success("Empleado guardado")
+            st.success("Guardado")
             st.rerun()
-
-    st.divider()
 
     empleados = c.execute("SELECT * FROM empleados").fetchall()
 
@@ -178,27 +149,36 @@ if modo == "Empleados":
 
         col1, col2 = st.columns(2)
 
-        with col1:
-            if st.button(f"Actualizar {emp[0]}"):
-                c.execute("UPDATE empleados SET nombre=? WHERE id=?", (nuevo, emp[0]))
-                conn.commit()
-                st.rerun()
+        if col1.button(f"Actualizar {emp[0]}"):
+            c.execute("UPDATE empleados SET nombre=? WHERE id=?", (nuevo, emp[0]))
+            conn.commit()
+            st.rerun()
 
-        with col2:
-            if st.button(f"Eliminar {emp[0]}"):
-                c.execute("DELETE FROM empleados WHERE id=?", (emp[0],))
-                conn.commit()
-                st.rerun()
+        if col2.button(f"Eliminar {emp[0]}"):
+            c.execute("DELETE FROM empleados WHERE id=?", (emp[0],))
+            conn.commit()
+            st.rerun()
 
 # ----------------------------
 # MARCAR
 # ----------------------------
 elif modo == "Marcar Asistencia":
 
-    st.subheader("📸 Registro")
+    st.subheader("📸 Registro con ubicación")
 
-    if not validar_geo(geo):
-        st.error("📍 Debes estar en la ubicación de trabajo para registrar asistencia")
+    coords = obtener_coords()
+
+    if coords is None:
+        st.warning("📍 Debes permitir la ubicación en tu dispositivo")
+        st.stop()
+
+    lat, lon = coords
+    dist = distancia_metros(lat, lon, LAT_REF, LON_REF)
+
+    st.caption(f"📍 Distancia al punto: {int(dist)} m")
+
+    if dist > RADIO_METROS:
+        st.error("🚫 Fuera del área permitida (100m)")
         st.stop()
 
     empleados = c.execute("SELECT * FROM empleados").fetchall()
@@ -206,7 +186,6 @@ elif modo == "Marcar Asistencia":
     if empleados:
         nombres = [e[1] for e in empleados]
         nombre_sel = st.selectbox("Selecciona tu nombre", nombres)
-
         tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
         foto = st.camera_input("Tomar selfie")
@@ -219,8 +198,7 @@ elif modo == "Marcar Asistencia":
             hora = ahora_dt.strftime("%H:%M")
 
             draw = ImageDraw.Draw(img)
-            texto = f"{nombre_sel} | {fecha} {hora}"
-            draw.text((10, 10), texto, fill=(255, 0, 0))
+            draw.text((10, 10), f"{nombre_sel} {fecha} {hora}", fill=(255, 0, 0))
 
             path = f"fotos_registros/{uuid.uuid4()}.jpg"
             img.save(path)
@@ -231,19 +209,16 @@ elif modo == "Marcar Asistencia":
                 INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo, foto)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (emp[0], nombre_sel, fecha, hora, tipo, path))
-
             conn.commit()
 
             guardar_en_sheets(nombre_sel, fecha, hora, tipo)
 
-            frase = random.choice(frases)
-
             st.success(f"✅ Bienvenido {nombre_sel}")
-            st.info(frase)
+            st.info(random.choice(frases))
             st.image(path)
 
 # ----------------------------
-# AUDITORÍA
+# AUDITORIA
 # ----------------------------
 else:
 
@@ -253,7 +228,7 @@ else:
 
     if registros:
         df = pd.DataFrame(registros, columns=[
-            "ID", "Empleado ID", "Nombre", "Fecha", "Hora", "Tipo", "Foto"
+            "ID", "EmpID", "Nombre", "Fecha", "Hora", "Tipo", "Foto"
         ])
 
         st.dataframe(df.drop(columns=["Foto"]))
