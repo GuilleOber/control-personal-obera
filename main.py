@@ -19,7 +19,7 @@ RADIO = 100  # metros
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
-# ---------------- NOTICIAS ----------------
+# ---------------- NOTICIAS (cache 1 semana) ----------------
 @st.cache_data(ttl=604800)
 def obtener_noticia():
     try:
@@ -42,7 +42,6 @@ def distancia_metros(lat1, lon1, lat2, lon2):
     R = 6371000
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
-
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
 
@@ -90,7 +89,7 @@ if menu == "Asistencia":
     st.subheader("📸 Control de Asistencia")
     st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
-    # 📰 noticia
+    # 📰 NOTICIA AL INICIO
     st.markdown("### 📰 Última noticia")
     st.info(obtener_noticia())
 
@@ -108,13 +107,25 @@ if menu == "Asistencia":
     lat = None
     lon = None
 
-    # 📍 GEO CON BOTÓN (clave para móvil)
+    # 📍 GEO UX MEJORADA
     if geo_activa:
 
         if not st.session_state.geo_ok:
-            st.warning("📍 Se requiere ubicación")
 
-            if st.button("Activar ubicación"):
+            st.warning("📍 Esta acción requiere validar tu ubicación")
+
+            st.info("""
+👉 Pasos para habilitar ubicación:
+
+1. Tocá **Activar ubicación**
+2. Si no aparece el permiso:
+   - Android: Configuración → Apps → Navegador → Permisos → Ubicación → Permitir
+   - O tocá el ícono 🔒 en la barra del navegador
+
+3. Volvé a intentar
+""")
+
+            if st.button("📍 Activar ubicación", type="primary"):
                 st.session_state.geo_ok = True
                 st.rerun()
 
@@ -130,14 +141,24 @@ if menu == "Asistencia":
 
             if lat and lon:
                 dist = distancia_metros(LAT_OBJ, LON_OBJ, lat, lon)
-                st.write(f"📍 Distancia: {int(dist)} m")
+
+                st.success(f"📍 Ubicación validada ({int(dist)} m)")
 
                 if dist > RADIO:
                     permitido = False
-                    st.error("❌ Fuera de zona permitida")
+                    st.error("❌ Estás fuera del área permitida (100 m)")
             else:
                 permitido = False
-                st.warning("⚠️ Aceptá el permiso de ubicación del navegador")
+
+                st.error("❌ No se pudo obtener la ubicación")
+
+                st.info("""
+🔧 Solución rápida:
+
+✔ Abrí la app desde el navegador (no desde el ícono instalado)  
+✔ Activá ubicación en ajustes del celular  
+✔ Recargá la página  
+""")
 
     # 📸 FOTO
     foto = st.camera_input("Selfie") if permitido else None
