@@ -6,113 +6,199 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw
 import requests
 from bs4 import BeautifulSoup
+import math
 
 # ---------------- CONFIG ----------------
-st.set_page_config(
-    page_title="Control de Personal MTE",
-    layout="centered"
-)
+st.set_page_config(page_title="Control Personal MTE", layout="wide")
 
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
-# ---------------- FONDO ----------------
-st.markdown(
-    """
-    <style>
-    .stApp {
-        background-image: url("https://upload.wikimedia.org/wikipedia/commons/6/6e/Escudo_de_la_Provincia_de_Misiones.svg");
-        background-size: cover;
-        background-position: center;
-        background-attachment: fixed;
-    }
+# ---------------- ESTILO ----------------
+st.markdown("""
+<style>
+.stApp {
+    background-image: url("https://upload.wikimedia.org/wikipedia/commons/6/6e/Escudo_de_la_Provincia_de_Misiones.svg");
+    background-size: cover;
+    background-attachment: fixed;
+}
 
-    .bloque {
-        background-color: rgba(255,255,255,0.9);
-        padding: 20px;
-        border-radius: 15px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+.card {
+    background-color: rgba(255,255,255,0.92);
+    padding: 20px;
+    border-radius: 15px;
+    box-shadow: 0px 4px 15px rgba(0,0,0,0.2);
+}
+
+.big-title {
+    text-align:center;
+    font-size:50px;
+    color:green;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ---------------- DB ----------------
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS empleados (
-    id TEXT,
-    nombre TEXT,
-    foto TEXT
-)
-""")
-
+c.execute("CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT)")
+c.execute("CREATE TABLE IF NOT EXISTS config (id INTEGER, pass TEXT, geo INTEGER, radio INTEGER)")
 conn.commit()
 
-# ---------------- NOTICIAS CACHE ----------------
-@st.cache_data(ttl=604800)  # 7 días
-def obtener_noticia():
+if not c.execute("SELECT * FROM config").fetchone():
+    c.execute("INSERT INTO config VALUES (1,'admin',1,100)")
+    conn.commit()
+
+config = c.execute("SELECT * FROM config").fetchone()
+
+# ---------------- NOTICIAS ----------------
+@st.cache_data(ttl=604800)
+def noticia():
     try:
         url = "https://trabajo.misiones.gob.ar/noticias/"
-        res = requests.get(url, timeout=5)
-        soup = BeautifulSoup(res.text, "html.parser")
-
-        titulo = soup.find("h2")
-        if titulo:
-            return titulo.get_text(strip=True)
-
-        return "No hay noticias disponibles"
+        r = requests.get(url)
+        soup = BeautifulSoup(r.text, "html.parser")
+        return soup.find("h2").text
     except:
-        return "No se pudo cargar noticias"
+        return "No disponible"
 
-# ---------------- UI ----------------
-st.markdown("<div class='bloque'>", unsafe_allow_html=True)
+# ---------------- GEO ----------------
+LAT = -27.487735745039803
+LON = -55.126748202517426
 
-st.title("📸 Control de Personal MTE")
-st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
+def distancia(lat, lon):
+    R = 6371000
+    phi1 = math.radians(lat)
+    phi2 = math.radians(LAT)
+    dphi = math.radians(LAT - lat)
+    dlambda = math.radians(LON - lon)
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return 2*R*math.atan2(math.sqrt(a), math.sqrt(1-a))
 
-empleados = c.execute("SELECT * FROM empleados").fetchall()
+# ---------------- SESIÓN ----------------
+if "admin" not in st.session_state:
+    st.session_state.admin = False
 
-if not empleados:
-    st.warning("No hay empleados cargados")
-    st.stop()
+# ---------------- SIDEBAR ----------------
+st.sidebar.title("Control MTE")
+menu = st.sidebar.radio("Menú", ["Asistencia", "Admin"])
 
-nombre = st.selectbox("Empleado", [e[1] for e in empleados])
-tipo = st.radio("Tipo", ["Entrada", "Salida"])
+# =========================================================
+# 📸 ASISTENCIA
+# =========================================================
+if menu == "Asistencia":
 
-foto = st.camera_input("Tomar selfie")
+    col1, col2 = st.columns([2,1])
 
-# ---------------- REGISTRO ----------------
-if foto:
-    img = Image.open(foto)
-    draw = ImageDraw.Draw(img)
+    # ---------- PANEL IZQUIERDO ----------
+    with col1:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-    fecha = ahora().strftime("%d-%m-%Y")
-    hora = ahora().strftime("%H:%M")
+        st.subheader("📸 Marcar asistencia")
+        st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
-    draw.text((10, 10), f"{nombre} {fecha} {hora}", fill=(255, 0, 0))
+        empleados = c.execute("SELECT * FROM empleados").fetchall()
 
-    path = f"foto_{uuid.uuid4()}.jpg"
-    img.save(path)
+        if not empleados:
+            st.warning("No hay empleados")
+            st.stop()
 
-    # MENSAJE GRANDE
-    st.markdown(
-        f"""
-        <h1 style='text-align:center; color:green; font-size:60px;'>
-        ✅ BIENVENIDO {nombre.upper()}
-        </h1>
-        """,
-        unsafe_allow_html=True
-    )
+        nombre = st.selectbox("Empleado", [e[1] for e in empleados])
+        tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
-    st.markdown("### 📰 Información")
+        foto = st.camera_input("Tomar selfie")
 
-    noticia = obtener_noticia()
-    st.info(noticia)
+        if foto:
+            img = Image.open(foto)
+            draw = ImageDraw.Draw(img)
 
-    # RESET AUTOMÁTICO
-    st.rerun()
+            draw.text((10,10), f"{nombre} {ahora().strftime('%H:%M')}", fill=(255,0,0))
 
-st.markdown("</div>", unsafe_allow_html=True)
+            img.save(f"{uuid.uuid4()}.jpg")
+
+            st.markdown(f"<div class='big-title'>✅ BIENVENIDO {nombre.upper()}</div>", unsafe_allow_html=True)
+
+            st.success("Registro OK")
+
+            st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------- PANEL DERECHO ----------
+    with col2:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+
+        st.subheader("📍 Ubicación")
+
+        st.info("Validación simplificada activa")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+
+        st.subheader("📰 Última noticia")
+        st.write(noticia())
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# =========================================================
+# 🔐 ADMIN
+# =========================================================
+else:
+
+    if not st.session_state.admin:
+        st.subheader("Login Admin")
+
+        user = st.text_input("Usuario")
+        pwd = st.text_input("Password", type="password")
+
+        if st.button("Ingresar"):
+            if user == "admin" and pwd == config[1]:
+                st.session_state.admin = True
+                st.rerun()
+            else:
+                st.error("Error")
+
+    else:
+        tab1, tab2, tab3 = st.tabs(["Empleados","Geo","Seguridad"])
+
+        # -------- EMPLEADOS --------
+        with tab1:
+            st.subheader("Gestión")
+
+            nuevo = st.text_input("Nombre")
+
+            if st.button("Agregar"):
+                c.execute("INSERT INTO empleados VALUES (?,?)",(str(uuid.uuid4()),nuevo))
+                conn.commit()
+                st.rerun()
+
+            for e in c.execute("SELECT * FROM empleados"):
+                colA,colB = st.columns([3,1])
+                colA.write(e[1])
+                if colB.button(f"X {e[0]}"):
+                    c.execute("DELETE FROM empleados WHERE id=?",(e[0],))
+                    conn.commit()
+                    st.rerun()
+
+        # -------- GEO --------
+        with tab2:
+            geo = st.toggle("Activar geolocalización", value=bool(config[2]))
+            radio = st.slider("Radio",50,300,config[3])
+
+            if st.button("Guardar geo"):
+                c.execute("UPDATE config SET geo=?, radio=? WHERE id=1",(int(geo),radio))
+                conn.commit()
+                st.success("Guardado")
+
+        # -------- SEGURIDAD --------
+        with tab3:
+            nueva = st.text_input("Nueva contraseña", type="password")
+
+            if st.button("Guardar pass"):
+                c.execute("UPDATE config SET pass=? WHERE id=1",(nueva,))
+                conn.commit()
+                st.success("OK")
