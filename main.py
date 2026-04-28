@@ -70,7 +70,7 @@ if "admin" not in st.session_state:
     st.session_state.admin = False
 
 # ---------------- MENU ----------------
-menu = st.sidebar.radio("Menú", ["Asistencia","Admin"])
+menu = st.sidebar.radio("Menú", ["Asistencia", "Admin"])
 
 # =========================================================
 # 📸 ASISTENCIA
@@ -87,7 +87,7 @@ if menu == "Asistencia":
         st.stop()
 
     nombre = st.selectbox("Empleado", [e[1] for e in empleados])
-    tipo = st.radio("Tipo", ["Entrada","Salida"])
+    tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
     foto = st.camera_input("Selfie")
 
@@ -96,13 +96,14 @@ if menu == "Asistencia":
         fecha = now.strftime("%Y-%m-%d")
         hora = now.strftime("%H:%M:%S")
 
-        c.execute("INSERT INTO registros VALUES (?,?,?,?,?)",
-                  (str(uuid.uuid4()), nombre, tipo, fecha, hora))
+        c.execute(
+            "INSERT INTO registros VALUES (?,?,?,?,?)",
+            (str(uuid.uuid4()), nombre, tipo, fecha, hora)
+        )
         conn.commit()
 
         st.success(f"✅ Bienvenido {nombre}")
 
-        # 📰 NOTICIA
         st.markdown("### 📰 Última noticia")
         st.info(obtener_noticia())
 
@@ -125,7 +126,7 @@ else:
                 st.error("Credenciales incorrectas")
 
     else:
-        tab1, tab2, tab3 = st.tabs(["Empleados","Seguridad","Reportes"])
+        tab1, tab2, tab3 = st.tabs(["Empleados", "Seguridad", "Reportes"])
 
         # EMPLEADOS
         with tab1:
@@ -133,15 +134,17 @@ else:
 
             if st.button("Agregar"):
                 if nuevo:
-                    c.execute("INSERT INTO empleados VALUES (?,?)",
-                              (str(uuid.uuid4()), nuevo))
+                    c.execute(
+                        "INSERT INTO empleados VALUES (?,?)",
+                        (str(uuid.uuid4()), nuevo)
+                    )
                     conn.commit()
                     st.rerun()
 
             empleados = c.execute("SELECT * FROM empleados").fetchall()
 
             for e in empleados:
-                col1,col2 = st.columns([3,1])
+                col1, col2 = st.columns([3, 1])
                 col1.write(e[1])
                 if col2.button(f"Eliminar {e[0]}"):
                     c.execute("DELETE FROM empleados WHERE id=?", (e[0],))
@@ -154,7 +157,10 @@ else:
 
             if st.button("Cambiar contraseña"):
                 if nueva:
-                    c.execute("UPDATE config SET pass=? WHERE id=1",(nueva,))
+                    c.execute(
+                        "UPDATE config SET pass=? WHERE id=1",
+                        (nueva,)
+                    )
                     conn.commit()
                     st.success("Contraseña actualizada")
 
@@ -167,7 +173,10 @@ else:
             if not registros:
                 st.warning("No hay datos")
             else:
-                df = pd.DataFrame(registros, columns=["id","nombre","tipo","fecha","hora"])
+                df = pd.DataFrame(
+                    registros,
+                    columns=["id", "nombre", "tipo", "fecha", "hora"]
+                )
 
                 df["fecha"] = pd.to_datetime(df["fecha"])
 
@@ -176,17 +185,15 @@ else:
                     "id": "count"
                 }).reset_index()
 
-                resumen.columns = ["Empleado","Días trabajados","Registros"]
+                resumen.columns = ["Empleado", "Días trabajados", "Registros"]
 
                 st.dataframe(resumen)
 
-                # DESCARGA CSV
-                csv = df.to_csv(index=False).encode('utf-8')
+                csv = df.to_csv(index=False).encode("utf-8")
 
                 st.download_button(
-                    "⬇️ Descargar registros (CSV)",
-                    csv,
-                    "asistencia.csv",
-                    "text/csv"
-                )
+                    label="⬇️ Descargar registros (CSV)",
+                    data=csv,
+                    file_name="asistencia.csv",
+                    mime="text/csv"
                 )
