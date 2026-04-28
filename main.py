@@ -3,9 +3,7 @@ import sqlite3
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import os
 from PIL import Image, ImageDraw
-import random
 import requests
 from bs4 import BeautifulSoup
 
@@ -15,25 +13,38 @@ st.set_page_config(page_title="Control de Personal MTE", layout="centered")
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
+# ---------------- FONDO ----------------
+def fondo():
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background-image: url("https://upload.wikimedia.org/wikipedia/commons/6/6e/Escudo_de_la_Provincia_de_Misiones.svg");
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+        }
+        .bloque {
+            background-color: rgba(255,255,255,0.9);
+            padding: 20px;
+            border-radius: 15px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+fondo()
+
 # ---------------- DB ----------------
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute('''CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT, foto TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS config (
-    id INTEGER PRIMARY KEY,
-    admin_pass TEXT
-)''')
-
 conn.commit()
 
-if not c.execute("SELECT * FROM config").fetchone():
-    c.execute("INSERT INTO config VALUES (1, 'admin')")
-    conn.commit()
-
-admin_pass = c.execute("SELECT admin_pass FROM config").fetchone()[0]
-
-# ---------------- NOTICIAS ----------------
+# ---------------- NOTICIAS CACHE ----------------
+@st.cache_data(ttl=604800)  # 1 semana
 def obtener_noticia():
     try:
         url = "https://trabajo.misiones.gob.ar/noticias/"
@@ -43,120 +54,54 @@ def obtener_noticia():
         titulo = soup.find("h2")
         if titulo:
             return titulo.get_text()
+
         return "No hay noticias disponibles"
     except:
         return "No se pudo cargar noticias"
 
-# ---------------- SESIÓN ----------------
-if "admin" not in st.session_state:
-    st.session_state.admin = False
+# ---------------- UI ----------------
+st.markdown("<div class='bloque'>", unsafe_allow_html=True)
 
-# ---------------- MENÚ ----------------
-menu = st.sidebar.radio("Menú", ["📸 Asistencia", "🔐 Admin"])
+st.title("📸 Control de Personal MTE")
+st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
-# =========================================================
-# 📸 ASISTENCIA
-# =========================================================
-if menu == "📸 Asistencia":
+empleados = c.execute("SELECT * FROM empleados").fetchall()
 
-    st.title("📸 Control de Personal MTE")
-    st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
+if not empleados:
+    st.warning("No hay empleados cargados")
+    st.stop()
 
-    empleados = c.execute("SELECT * FROM empleados").fetchall()
+nombre = st.selectbox("Empleado", [e[1] for e in empleados])
+tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
-    if not empleados:
-        st.warning("No hay empleados cargados")
-        st.stop()
+foto = st.camera_input("Tomar selfie")
 
-    nombre = st.selectbox("Empleado", [e[1] for e in empleados])
-    tipo = st.radio("Tipo", ["Entrada", "Salida"])
+# ---------------- ACCIÓN ----------------
+if foto:
+    img = Image.open(foto)
+    draw = ImageDraw.Draw(img)
 
-    foto = st.camera_input("Tomar selfie")
+    fecha = ahora().strftime("%d-%m-%Y")
+    hora = ahora().strftime("%H:%M")
 
-    if foto:
-        img = Image.open(foto)
-        draw = ImageDraw.Draw(img)
+    draw.text((10, 10), f"{nombre} {fecha} {hora}", fill=(255, 0, 0))
 
-        fecha = ahora().strftime("%d-%m-%Y")
-        hora = ahora().strftime("%H:%M")
+    path = f"foto_{uuid.uuid4()}.jpg"
+    img.save(path)
 
-        draw.text((10, 10), f"{nombre} {fecha} {hora}", fill=(255, 0, 0))
+    # MENSAJE GRANDE
+    st.markdown(f"""
+    <h1 style='text-align:center; color:green; font-size:60px;'>
+    ✅ BIENVENIDO {nombre.upper()}
+    </h1>
+    """, unsafe_allow_html=True)
 
-        path = f"foto_{uuid.uuid4()}.jpg"
-        img.save(path)
+    st.markdown("### 📰 Información")
 
-        # MENSAJE GRANDE
-        st.markdown(f"""
-        <h1 style='text-align:center; color:green;'>
-        ✅ BIENVENIDO {nombre.upper()}
-        </h1>
-        """, unsafe_allow_html=True)
+    noticia = obtener_noticia()
+    st.info(noticia)
 
-        st.markdown("### 📰 Última noticia")
+    # RESET automático
+    st.rerun()
 
-        noticia = obtener_noticia()
-        st.info(noticia)
-
-        # RESET
-        st.rerun()
-
-# =========================================================
-# 🔐 ADMIN
-# =========================================================
-else:
-
-    if not st.session_state.admin:
-
-        st.subheader("Login Admin")
-
-        user = st.text_input("Usuario")
-        pwd = st.text_input("Contraseña", type="password")
-
-        if st.button("Ingresar"):
-            if user == "admin" and pwd == admin_pass:
-                st.session_state.admin = True
-                st.rerun()
-            else:
-                st.error("Credenciales incorrectas")
-
-    else:
-
-        tab1, tab2 = st.tabs(["👥 Empleados", "🔐 Seguridad"])
-
-        # ---------------- EMPLEADOS ----------------
-        with tab1:
-            st.subheader("Gestión de empleados")
-
-            nombre = st.text_input("Nombre nuevo")
-            foto = st.file_uploader("Foto")
-
-            if st.button("Agregar"):
-                if nombre and foto:
-                    path = f"{uuid.uuid4()}.jpg"
-                    Image.open(foto).save(path)
-
-                    c.execute("INSERT INTO empleados VALUES (?, ?, ?)",
-                              (str(uuid.uuid4()), nombre, path))
-                    conn.commit()
-                    st.rerun()
-
-            empleados = c.execute("SELECT * FROM empleados").fetchall()
-
-            for emp in empleados:
-                col1, col2 = st.columns([3,1])
-                col1.write(emp[1])
-                if col2.button(f"Eliminar {emp[0]}"):
-                    c.execute("DELETE FROM empleados WHERE id=?", (emp[0],))
-                    conn.commit()
-                    st.rerun()
-
-        # ---------------- SEGURIDAD ----------------
-        with tab2:
-            st.subheader("Cambiar contraseña")
-
-            nueva = st.text_input("Nueva contraseña", type="password")
-
-            if st.button("Guardar contraseña"):
-                c.execute("UPDATE config SET admin_pass=? WHERE id=1", (nueva,))
-                conn.commit()
-                st.success("Contraseña actualizada")
+st.markdown("</div>", unsafe_allow_html=True)
