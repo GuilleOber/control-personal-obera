@@ -2,3 +2,5 @@ streamlit
 pillow
 requests
 beautifulsoup4
+gspread
+oauth2client
