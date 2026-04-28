@@ -6,7 +6,6 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw
 import requests
 from bs4 import BeautifulSoup
-import math
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -76,7 +75,7 @@ def noticia():
     except:
         return "No disponible"
 
-# ---------------- SHEETS ----------------
+# ---------------- GOOGLE SHEETS ----------------
 def conectar():
     scope = [
         "https://spreadsheets.google.com/feeds",
@@ -90,6 +89,7 @@ def conectar():
 def enviar_a_sheets(nombre, tipo, fecha, hora):
     try:
         client = conectar()
+
         archivo = f"Asistencia_{fecha[:7].replace('-','_')}"
         hoja = fecha
 
@@ -106,6 +106,7 @@ def enviar_a_sheets(nombre, tipo, fecha, hora):
 
         ws.append_row([nombre, fecha, hora, tipo])
         return True
+
     except:
         return False
 
@@ -118,6 +119,53 @@ def procesar_cola():
             q_conn.commit()
 
 procesar_cola()
+
+# ---------------- REPORTE ----------------
+def generar_reporte_mensual():
+    try:
+        client = conectar()
+
+        now = ahora()
+        archivo = f"Asistencia_{now.strftime('%Y_%m')}"
+
+        spreadsheet = client.open(archivo)
+        hojas = spreadsheet.worksheets()
+
+        resumen = {}
+
+        for hoja in hojas:
+            if hoja.title == "Resumen_Mensual":
+                continue
+
+            datos = hoja.get_all_values()
+
+            for fila in datos[1:]:
+                nombre = fila[0]
+
+                if nombre not in resumen:
+                    resumen[nombre] = {"dias": set(), "registros": 0}
+
+                resumen[nombre]["registros"] += 1
+                resumen[nombre]["dias"].add(hoja.title)
+
+        try:
+            ws = spreadsheet.worksheet("Resumen_Mensual")
+            ws.clear()
+        except:
+            ws = spreadsheet.add_worksheet(title="Resumen_Mensual", rows="100", cols="10")
+
+        ws.append_row(["Empleado", "Días trabajados", "Registros"])
+
+        for nombre, data in resumen.items():
+            ws.append_row([nombre, len(data["dias"]), data["registros"]])
+
+        url = f"https://docs.google.com/spreadsheets/d/{spreadsheet.id}/edit#gid={ws.id}"
+
+        st.success("Reporte generado ✅")
+        st.markdown(f"👉 [Abrir reporte]({url})")
+
+    except Exception as e:
+        st.error(f"Error reporte: {e}")
 
 # ---------------- SESIÓN ----------------
 if "admin" not in st.session_state:
@@ -195,29 +243,30 @@ else:
         st.subheader("Login Admin")
 
         user = st.text_input("Usuario")
-        pwd = st.text_input("Password", type="password")
+        pwd = st.text_input("Contraseña", type="password")
 
         if st.button("Ingresar"):
             if user == "admin" and pwd == config[1]:
                 st.session_state.admin = True
                 st.rerun()
             else:
-                st.error("Error")
+                st.error("Credenciales incorrectas")
 
     else:
-        tab1, tab2, tab3 = st.tabs(["Empleados","Config","Seguridad"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Empleados","Config","Seguridad","Reportes"])
 
         # EMPLEADOS
         with tab1:
             nuevo = st.text_input("Nuevo empleado")
 
             if st.button("Agregar"):
-                c.execute(
-                    "INSERT INTO empleados (id, nombre, foto) VALUES (?,?,?)",
-                    (str(uuid.uuid4()), nuevo, "")
-                )
-                conn.commit()
-                st.rerun()
+                if nuevo:
+                    c.execute(
+                        "INSERT INTO empleados (id, nombre, foto) VALUES (?,?,?)",
+                        (str(uuid.uuid4()), nuevo, "")
+                    )
+                    conn.commit()
+                    st.rerun()
 
             for e in c.execute("SELECT * FROM empleados"):
                 colA,colB = st.columns([3,1])
@@ -230,9 +279,9 @@ else:
         # CONFIG
         with tab2:
             geo = st.toggle("Geolocalización", value=bool(config[2]))
-            radio = st.slider("Radio", 50, 300, config[3])
+            radio = st.slider("Radio (m)", 50, 300, config[3])
 
-            if st.button("Guardar config"):
+            if st.button("Guardar configuración"):
                 c.execute("UPDATE config SET geo=?, radio=? WHERE id=1",(int(geo),radio))
                 conn.commit()
                 st.success("Guardado")
@@ -241,7 +290,15 @@ else:
         with tab3:
             nueva = st.text_input("Nueva contraseña", type="password")
 
-            if st.button("Guardar pass"):
-                c.execute("UPDATE config SET pass=? WHERE id=1",(nueva,))
-                conn.commit()
-                st.success("Actualizado")
+            if st.button("Cambiar contraseña"):
+                if nueva:
+                    c.execute("UPDATE config SET pass=? WHERE id=1",(nueva,))
+                    conn.commit()
+                    st.success("Actualizada")
+
+        # REPORTES
+        with tab4:
+            st.subheader("📊 Reporte mensual")
+
+            if st.button("Generar reporte mensual"):
+                generar_reporte_mensual()
