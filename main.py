@@ -42,39 +42,58 @@ st.markdown("""
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
-c.execute("CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT)")
-c.execute("CREATE TABLE IF NOT EXISTS config (id INTEGER, pass TEXT, geo INTEGER, radio INTEGER)")
+# TABLAS LIMPIAS Y CONSISTENTES
+c.execute("""
+CREATE TABLE IF NOT EXISTS empleados (
+    id TEXT,
+    nombre TEXT,
+    foto TEXT
+)
+""")
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS config (
+    id INTEGER,
+    pass TEXT,
+    geo INTEGER,
+    radio INTEGER
+)
+""")
+
 conn.commit()
 
+# INIT CONFIG
 if not c.execute("SELECT * FROM config").fetchone():
     c.execute("INSERT INTO config VALUES (1,'admin',1,100)")
     conn.commit()
 
 config = c.execute("SELECT * FROM config").fetchone()
 
-# ---------------- NOTICIAS ----------------
-@st.cache_data(ttl=604800)
-def noticia():
+# ---------------- NOTICIAS CACHE ----------------
+@st.cache_data(ttl=604800)  # 7 días
+def obtener_noticia():
     try:
         url = "https://trabajo.misiones.gob.ar/noticias/"
-        r = requests.get(url)
+        r = requests.get(url, timeout=5)
         soup = BeautifulSoup(r.text, "html.parser")
-        return soup.find("h2").text
+        titulo = soup.find("h2")
+        return titulo.text.strip() if titulo else "No disponible"
     except:
-        return "No disponible"
+        return "No se pudo cargar noticias"
 
 # ---------------- GEO ----------------
-LAT = -27.487735745039803
-LON = -55.126748202517426
+LAT_REF = -27.487735745039803
+LON_REF = -55.126748202517426
 
 def distancia(lat, lon):
     R = 6371000
     phi1 = math.radians(lat)
-    phi2 = math.radians(LAT)
-    dphi = math.radians(LAT - lat)
-    dlambda = math.radians(LON - lon)
+    phi2 = math.radians(LAT_REF)
+    dphi = math.radians(LAT_REF - lat)
+    dlambda = math.radians(LON_REF - lon)
+
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return 2*R*math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 # ---------------- SESIÓN ----------------
 if "admin" not in st.session_state:
@@ -101,7 +120,7 @@ if menu == "Asistencia":
         empleados = c.execute("SELECT * FROM empleados").fetchall()
 
         if not empleados:
-            st.warning("No hay empleados")
+            st.warning("No hay empleados cargados")
             st.stop()
 
         nombre = st.selectbox("Empleado", [e[1] for e in empleados])
@@ -113,13 +132,18 @@ if menu == "Asistencia":
             img = Image.open(foto)
             draw = ImageDraw.Draw(img)
 
-            draw.text((10,10), f"{nombre} {ahora().strftime('%H:%M')}", fill=(255,0,0))
+            fecha = ahora().strftime("%d-%m-%Y")
+            hora = ahora().strftime("%H:%M")
+
+            draw.text((10,10), f"{nombre} {fecha} {hora}", fill=(255,0,0))
 
             img.save(f"{uuid.uuid4()}.jpg")
 
             st.markdown(f"<div class='big-title'>✅ BIENVENIDO {nombre.upper()}</div>", unsafe_allow_html=True)
-
             st.success("Registro OK")
+
+            st.markdown("### 📰 Información")
+            st.info(obtener_noticia())
 
             st.rerun()
 
@@ -130,8 +154,10 @@ if menu == "Asistencia":
         st.markdown("<div class='card'>", unsafe_allow_html=True)
 
         st.subheader("📍 Ubicación")
-
-        st.info("Validación simplificada activa")
+        if config[2]:
+            st.success(f"Geolocalización activa (radio {config[3]}m)")
+        else:
+            st.warning("Geolocalización desactivada")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -140,7 +166,7 @@ if menu == "Asistencia":
         st.markdown("<div class='card'>", unsafe_allow_html=True)
 
         st.subheader("📰 Última noticia")
-        st.write(noticia())
+        st.write(obtener_noticia())
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -153,52 +179,63 @@ else:
         st.subheader("Login Admin")
 
         user = st.text_input("Usuario")
-        pwd = st.text_input("Password", type="password")
+        pwd = st.text_input("Contraseña", type="password")
 
         if st.button("Ingresar"):
             if user == "admin" and pwd == config[1]:
                 st.session_state.admin = True
                 st.rerun()
             else:
-                st.error("Error")
+                st.error("Credenciales incorrectas")
 
     else:
-        tab1, tab2, tab3 = st.tabs(["Empleados","Geo","Seguridad"])
+        tab1, tab2, tab3 = st.tabs(["👥 Empleados","📍 Geo","🔐 Seguridad"])
 
         # -------- EMPLEADOS --------
         with tab1:
-            st.subheader("Gestión")
+            st.subheader("Gestión de empleados")
 
             nuevo = st.text_input("Nombre")
 
             if st.button("Agregar"):
-                c.execute("INSERT INTO empleados VALUES (?,?)",(str(uuid.uuid4()),nuevo))
-                conn.commit()
-                st.rerun()
+                if nuevo:
+                    c.execute(
+                        "INSERT INTO empleados (id, nombre, foto) VALUES (?,?,?)",
+                        (str(uuid.uuid4()), nuevo, "")
+                    )
+                    conn.commit()
+                    st.rerun()
 
-            for e in c.execute("SELECT * FROM empleados"):
-                colA,colB = st.columns([3,1])
+            empleados = c.execute("SELECT * FROM empleados").fetchall()
+
+            for e in empleados:
+                colA, colB = st.columns([3,1])
                 colA.write(e[1])
-                if colB.button(f"X {e[0]}"):
-                    c.execute("DELETE FROM empleados WHERE id=?",(e[0],))
+                if colB.button(f"Eliminar {e[0]}"):
+                    c.execute("DELETE FROM empleados WHERE id=?", (e[0],))
                     conn.commit()
                     st.rerun()
 
         # -------- GEO --------
         with tab2:
             geo = st.toggle("Activar geolocalización", value=bool(config[2]))
-            radio = st.slider("Radio",50,300,config[3])
+            radio = st.slider("Radio permitido (m)", 50, 300, config[3])
 
-            if st.button("Guardar geo"):
-                c.execute("UPDATE config SET geo=?, radio=? WHERE id=1",(int(geo),radio))
+            if st.button("Guardar configuración"):
+                c.execute(
+                    "UPDATE config SET geo=?, radio=? WHERE id=1",
+                    (int(geo), radio)
+                )
                 conn.commit()
-                st.success("Guardado")
+                st.success("Configuración guardada")
+                st.rerun()
 
         # -------- SEGURIDAD --------
         with tab3:
             nueva = st.text_input("Nueva contraseña", type="password")
 
-            if st.button("Guardar pass"):
-                c.execute("UPDATE config SET pass=? WHERE id=1",(nueva,))
-                conn.commit()
-                st.success("OK")
+            if st.button("Cambiar contraseña"):
+                if nueva:
+                    c.execute("UPDATE config SET pass=? WHERE id=1", (nueva,))
+                    conn.commit()
+                    st.success("Contraseña actualizada")
