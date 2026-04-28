@@ -6,28 +6,47 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+import math
+from streamlit_js_eval import streamlit_js_eval
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Control Personal MTE", layout="wide")
+
+LAT_OBJ = -27.487748007596725
+LON_OBJ = -55.126722244339206
+RADIO = 100  # metros
 
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
 # ---------------- NOTICIA CACHEADA ----------------
-@st.cache_data(ttl=604800)  # 1 semana
+@st.cache_data(ttl=604800)
 def obtener_noticia():
     try:
         url = "https://trabajo.misiones.gob.ar/noticias/"
         r = requests.get(url, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        titulo = soup.find("h2")
-        if not titulo:
-            titulo = soup.find("h3")
+        titulos = soup.find_all(["h2","h3"])
+        for t in titulos:
+            texto = t.get_text(strip=True)
+            if len(texto) > 20:
+                return texto
 
-        return titulo.text.strip() if titulo else "No hay noticias disponibles"
+        return "No se encontró noticia"
     except:
-        return "No se pudo cargar la noticia"
+        return "Error cargando noticias"
+
+# ---------------- DISTANCIA ----------------
+def distancia_metros(lat1, lon1, lat2, lon2):
+    R = 6371000
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 # ---------------- DB ----------------
 conn = sqlite3.connect("data.db", check_same_thread=False)
@@ -53,14 +72,15 @@ CREATE TABLE IF NOT EXISTS registros (
 c.execute("""
 CREATE TABLE IF NOT EXISTS config (
     id INTEGER,
-    pass TEXT
+    pass TEXT,
+    geo INTEGER
 )
 """)
 
 conn.commit()
 
 if not c.execute("SELECT * FROM config").fetchone():
-    c.execute("INSERT INTO config VALUES (1,'admin')")
+    c.execute("INSERT INTO config VALUES (1,'admin',1)")
     conn.commit()
 
 config = c.execute("SELECT * FROM config").fetchone()
@@ -80,6 +100,10 @@ if menu == "Asistencia":
     st.subheader("📸 Control de Asistencia")
     st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
+    # 📰 noticia arriba
+    st.markdown("### 📰 Última noticia")
+    st.info(obtener_noticia())
+
     empleados = c.execute("SELECT * FROM empleados").fetchall()
 
     if not empleados:
@@ -89,7 +113,32 @@ if menu == "Asistencia":
     nombre = st.selectbox("Empleado", [e[1] for e in empleados])
     tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
-    foto = st.camera_input("Selfie")
+    geo_activa = bool(config[2])
+
+    permitido = True
+    lat = None
+    lon = None
+
+    if geo_activa:
+        lat = streamlit_js_eval(
+            js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.latitude)"
+        )
+        lon = streamlit_js_eval(
+            js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.longitude)"
+        )
+
+        if lat and lon:
+            dist = distancia_metros(LAT_OBJ, LON_OBJ, lat, lon)
+            st.write(f"📍 Distancia: {int(dist)} m")
+
+            if dist > RADIO:
+                permitido = False
+                st.error("❌ Fuera de zona permitida")
+        else:
+            permitido = False
+            st.warning("⚠️ Activá la ubicación del dispositivo")
+
+    foto = st.camera_input("Selfie") if permitido else None
 
     if foto:
         now = ahora()
@@ -103,10 +152,6 @@ if menu == "Asistencia":
         conn.commit()
 
         st.success(f"✅ Bienvenido {nombre}")
-
-        st.markdown("### 📰 Última noticia")
-        st.info(obtener_noticia())
-
         st.rerun()
 
 # =========================================================
@@ -151,18 +196,21 @@ else:
                     conn.commit()
                     st.rerun()
 
-        # SEGURIDAD
+        # SEGURIDAD + GEO
         with tab2:
             nueva = st.text_input("Nueva contraseña", type="password")
 
-            if st.button("Cambiar contraseña"):
+            geo_toggle = st.toggle(
+                "Requerir geolocalización",
+                value=bool(config[2])
+            )
+
+            if st.button("Guardar cambios"):
                 if nueva:
-                    c.execute(
-                        "UPDATE config SET pass=? WHERE id=1",
-                        (nueva,)
-                    )
-                    conn.commit()
-                    st.success("Contraseña actualizada")
+                    c.execute("UPDATE config SET pass=? WHERE id=1", (nueva,))
+                c.execute("UPDATE config SET geo=? WHERE id=1", (int(geo_toggle),))
+                conn.commit()
+                st.success("Configuración actualizada")
 
         # REPORTES
         with tab3:
