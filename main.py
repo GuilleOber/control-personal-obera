@@ -53,6 +53,7 @@ def conectar_sheets():
 def guardar_en_sheets(nombre, fecha, hora, tipo):
     try:
         sheet = conectar_sheets()
+
         try:
             ws = sheet.worksheet(fecha)
         except:
@@ -60,8 +61,10 @@ def guardar_en_sheets(nombre, fecha, hora, tipo):
             ws.append_row(["Nombre", "Fecha", "Hora", "Tipo"])
 
         ws.append_row([nombre, fecha, hora, tipo])
+
     except Exception as e:
-        st.warning(f"Error Sheets: {e}")
+        st.error("❌ Error completo en Google Sheets:")
+        st.exception(e)
 
 # ----------------------------
 # DB
@@ -85,8 +88,12 @@ os.makedirs("fotos_empleados", exist_ok=True)
 os.makedirs("fotos_registros", exist_ok=True)
 
 # ----------------------------
-# GEO (100 metros)
+# GEO CONFIG
 # ----------------------------
+LAT_REF = -27.487735745039803
+LON_REF = -55.126748202517426
+RADIO_METROS = 100
+
 def obtener_coords():
     return streamlit_js_eval(
         js_expressions="""
@@ -109,11 +116,6 @@ def distancia_metros(lat1, lon1, lat2, lon2):
 
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
-
-# Coordenadas base (Oberá)
-LAT_REF = -27.487735745039803
-LON_REF = -55.126748202517426
-RADIO_METROS = 100
 
 # ----------------------------
 # MENU
@@ -138,7 +140,7 @@ if modo == "Empleados":
 
             c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (emp_id, nombre, path))
             conn.commit()
-            st.success("Guardado")
+            st.success("Empleado guardado")
             st.rerun()
 
     empleados = c.execute("SELECT * FROM empleados").fetchall()
@@ -218,7 +220,7 @@ elif modo == "Marcar Asistencia":
             st.image(path)
 
 # ----------------------------
-# AUDITORIA
+# AUDITORÍA
 # ----------------------------
 else:
 
