@@ -4,12 +4,30 @@ import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Control Personal MTE", layout="wide")
 
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
+
+# ---------------- NOTICIA CACHEADA ----------------
+@st.cache_data(ttl=604800)  # 1 semana
+def obtener_noticia():
+    try:
+        url = "https://trabajo.misiones.gob.ar/noticias/"
+        r = requests.get(url, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        titulo = soup.find("h2")
+        if not titulo:
+            titulo = soup.find("h3")
+
+        return titulo.text.strip() if titulo else "No hay noticias disponibles"
+    except:
+        return "No se pudo cargar la noticia"
 
 # ---------------- DB ----------------
 conn = sqlite3.connect("data.db", check_same_thread=False)
@@ -83,6 +101,11 @@ if menu == "Asistencia":
         conn.commit()
 
         st.success(f"✅ Bienvenido {nombre}")
+
+        # 📰 NOTICIA
+        st.markdown("### 📰 Última noticia")
+        st.info(obtener_noticia())
+
         st.rerun()
 
 # =========================================================
