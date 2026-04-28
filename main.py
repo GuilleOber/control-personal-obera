@@ -37,14 +37,21 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- DB PRINCIPAL ----------------
+# ---------------- DB ----------------
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT, foto TEXT)")
+c.execute("CREATE TABLE IF NOT EXISTS config (id INTEGER, pass TEXT, geo INTEGER, radio INTEGER)")
 conn.commit()
 
-# ---------------- COLA LOCAL ----------------
+if not c.execute("SELECT * FROM config").fetchone():
+    c.execute("INSERT INTO config VALUES (1,'admin',1,100)")
+    conn.commit()
+
+config = c.execute("SELECT * FROM config").fetchone()
+
+# ---------------- COLA ----------------
 q_conn = sqlite3.connect("queue.db", check_same_thread=False)
 q = q_conn.cursor()
 
@@ -69,23 +76,20 @@ def noticia():
     except:
         return "No disponible"
 
-# ---------------- GOOGLE SHEETS ----------------
+# ---------------- SHEETS ----------------
 def conectar():
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive"
     ]
-
     creds = ServiceAccountCredentials.from_json_keyfile_dict(
         st.secrets["gcp_service_account"], scope
     )
-
     return gspread.authorize(creds)
 
 def enviar_a_sheets(nombre, tipo, fecha, hora):
     try:
         client = conectar()
-
         archivo = f"Asistencia_{fecha[:7].replace('-','_')}"
         hoja = fecha
 
@@ -102,58 +106,142 @@ def enviar_a_sheets(nombre, tipo, fecha, hora):
 
         ws.append_row([nombre, fecha, hora, tipo])
         return True
-
     except:
         return False
 
-# ---------------- PROCESAR COLA ----------------
 def procesar_cola():
     registros = q.execute("SELECT * FROM cola").fetchall()
-
     for r in registros:
         ok = enviar_a_sheets(r[1], r[2], r[3], r[4])
         if ok:
             q.execute("DELETE FROM cola WHERE id=?", (r[0],))
             q_conn.commit()
 
-# Ejecutar al inicio
 procesar_cola()
 
-# ---------------- UI ----------------
-st.title("📸 Control Personal MTE")
-st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
+# ---------------- SESIÓN ----------------
+if "admin" not in st.session_state:
+    st.session_state.admin = False
 
-empleados = c.execute("SELECT * FROM empleados").fetchall()
+# ---------------- SIDEBAR ----------------
+st.sidebar.title("Control MTE")
+menu = st.sidebar.radio("Menú", ["Asistencia","Admin"])
 
-if not empleados:
-    st.warning("No hay empleados cargados")
-    st.stop()
+# =========================================================
+# 📸 ASISTENCIA
+# =========================================================
+if menu == "Asistencia":
 
-nombre = st.selectbox("Empleado", [e[1] for e in empleados])
-tipo = st.radio("Tipo", ["Entrada","Salida"])
+    col1, col2 = st.columns([2,1])
 
-foto = st.camera_input("Selfie")
+    with col1:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-if foto:
-    now = ahora()
-    fecha = now.strftime("%Y-%m-%d")
-    hora = now.strftime("%H:%M:%S")
+        st.subheader("📸 Asistencia")
+        st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
-    # Intentar enviar
-    ok = enviar_a_sheets(nombre, tipo, fecha, hora)
+        empleados = c.execute("SELECT * FROM empleados").fetchall()
 
-    if not ok:
-        # guardar en cola
-        q.execute("INSERT INTO cola VALUES (?,?,?,?,?)",
-                  (str(uuid.uuid4()), nombre, tipo, fecha, hora))
-        q_conn.commit()
-        st.warning("Guardado en cola (sin internet)")
+        if not empleados:
+            st.warning("No hay empleados")
+            st.stop()
+
+        nombre = st.selectbox("Empleado", [e[1] for e in empleados])
+        tipo = st.radio("Tipo", ["Entrada","Salida"])
+
+        foto = st.camera_input("Selfie")
+
+        if foto:
+            now = ahora()
+            fecha = now.strftime("%Y-%m-%d")
+            hora = now.strftime("%H:%M:%S")
+
+            ok = enviar_a_sheets(nombre, tipo, fecha, hora)
+
+            if not ok:
+                q.execute("INSERT INTO cola VALUES (?,?,?,?,?)",
+                          (str(uuid.uuid4()), nombre, tipo, fecha, hora))
+                q_conn.commit()
+                st.warning("Sin conexión → guardado en cola")
+            else:
+                st.success("Guardado en Sheets")
+
+            st.markdown(f"<div class='big-title'>✅ {nombre.upper()}</div>", unsafe_allow_html=True)
+            st.info(noticia())
+
+            st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.subheader("📦 Cola pendiente")
+
+        pendientes = q.execute("SELECT COUNT(*) FROM cola").fetchone()[0]
+        st.write(f"Registros pendientes: {pendientes}")
+
+        if st.button("Sincronizar ahora"):
+            procesar_cola()
+            st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# =========================================================
+# 🔐 ADMIN
+# =========================================================
+else:
+
+    if not st.session_state.admin:
+        st.subheader("Login Admin")
+
+        user = st.text_input("Usuario")
+        pwd = st.text_input("Password", type="password")
+
+        if st.button("Ingresar"):
+            if user == "admin" and pwd == config[1]:
+                st.session_state.admin = True
+                st.rerun()
+            else:
+                st.error("Error")
 
     else:
-        st.success("Guardado en Google Sheets")
+        tab1, tab2, tab3 = st.tabs(["Empleados","Config","Seguridad"])
 
-    st.markdown(f"<div class='big-title'>✅ BIENVENIDO {nombre.upper()}</div>", unsafe_allow_html=True)
+        # EMPLEADOS
+        with tab1:
+            nuevo = st.text_input("Nuevo empleado")
 
-    st.info(noticia())
+            if st.button("Agregar"):
+                c.execute(
+                    "INSERT INTO empleados (id, nombre, foto) VALUES (?,?,?)",
+                    (str(uuid.uuid4()), nuevo, "")
+                )
+                conn.commit()
+                st.rerun()
 
-    st.rerun()
+            for e in c.execute("SELECT * FROM empleados"):
+                colA,colB = st.columns([3,1])
+                colA.write(e[1])
+                if colB.button(f"Eliminar {e[0]}"):
+                    c.execute("DELETE FROM empleados WHERE id=?", (e[0],))
+                    conn.commit()
+                    st.rerun()
+
+        # CONFIG
+        with tab2:
+            geo = st.toggle("Geolocalización", value=bool(config[2]))
+            radio = st.slider("Radio", 50, 300, config[3])
+
+            if st.button("Guardar config"):
+                c.execute("UPDATE config SET geo=?, radio=? WHERE id=1",(int(geo),radio))
+                conn.commit()
+                st.success("Guardado")
+
+        # SEGURIDAD
+        with tab3:
+            nueva = st.text_input("Nueva contraseña", type="password")
+
+            if st.button("Guardar pass"):
+                c.execute("UPDATE config SET pass=? WHERE id=1",(nueva,))
+                conn.commit()
+                st.success("Actualizado")
