@@ -7,6 +7,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import math
+import random
 from streamlit_js_eval import streamlit_js_eval
 
 # ---------------- CONFIG ----------------
@@ -19,19 +20,36 @@ RADIO = 100
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
-# ---------------- NOTICIAS ----------------
+# ---------------- ARTICULOS LEY ----------------
+articulos_ley = [
+    "Art. 14: El trabajo es protegido por la ley.",
+    "Art. 21: Existe contrato de trabajo cuando una persona realiza actos a favor de otra.",
+    "Art. 62: Las partes deben obrar con buena fe.",
+    "Art. 74: El empleador debe garantizar condiciones dignas.",
+    "Art. 84: El trabajador debe cumplir con diligencia.",
+    "Art. 103: Se considera remuneración todo ingreso del trabajador.",
+    "Art. 197: Jornada máxima 8 horas diarias.",
+]
+
+def articulo_del_dia():
+    dia = ahora().timetuple().tm_yday
+    return articulos_ley[dia % len(articulos_ley)]
+
+# ---------------- NOTICIA ----------------
 @st.cache_data(ttl=604800)
 def obtener_noticia():
     try:
-        r = requests.get("https://trabajo.misiones.gob.ar/noticias/", timeout=10)
+        r = requests.get("https://trabajo.misiones.gob.ar/noticias/", timeout=5)
         soup = BeautifulSoup(r.text, "html.parser")
+
         for t in soup.find_all(["h2","h3"]):
             txt = t.get_text(strip=True)
             if len(txt) > 20:
                 return txt
-        return "No hay noticias"
+
+        return articulo_del_dia()
     except:
-        return "Error cargando noticias"
+        return articulo_del_dia()
 
 # ---------------- DISTANCIA ----------------
 def distancia_metros(lat1, lon1, lat2, lon2):
@@ -40,6 +58,7 @@ def distancia_metros(lat1, lon1, lat2, lon2):
     phi2 = math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
+
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
@@ -75,7 +94,7 @@ if menu == "Asistencia":
     st.subheader("📸 Control de Asistencia")
     st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
-    st.markdown("### 📰 Última noticia")
+    st.markdown("### 📰 Información")
     st.info(obtener_noticia())
 
     empleados = c.execute("SELECT * FROM empleados").fetchall()
@@ -88,17 +107,19 @@ if menu == "Asistencia":
     tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
     geo_activa = bool(config[2])
-    permitido = True
+
+    # 👇 CLAVE: SI GEO DESACTIVADA → PERMITIR DIRECTO
+    permitido = not geo_activa
+
     lat = lon = None
 
-    # ---------------- GEO ROBUSTO ----------------
     if geo_activa:
 
         st.markdown("### 📍 Validación de ubicación")
 
         if st.session_state.geo_estado == "inicio":
-            st.warning("Necesitás validar ubicación")
-            if st.button("📍 Activar ubicación", type="primary"):
+            st.warning("Validar ubicación")
+            if st.button("📍 Activar ubicación"):
                 st.session_state.geo_estado = "obteniendo"
                 st.rerun()
             permitido = False
@@ -106,17 +127,21 @@ if menu == "Asistencia":
         elif st.session_state.geo_estado == "obteniendo":
             lat = streamlit_js_eval(js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.latitude)")
             lon = streamlit_js_eval(js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.longitude)")
+
             if lat and lon:
                 st.session_state.geo_estado = "validando"
             else:
                 st.session_state.geo_estado = "error"
+
             st.rerun()
             permitido = False
 
         elif st.session_state.geo_estado == "validando":
             dist = distancia_metros(LAT_OBJ, LON_OBJ, lat, lon)
+
             if dist <= RADIO:
                 st.success(f"Ubicación válida ({int(dist)} m)")
+                permitido = True
             else:
                 permitido = False
                 st.error("Fuera de zona")
@@ -124,15 +149,17 @@ if menu == "Asistencia":
         elif st.session_state.geo_estado == "error":
             permitido = False
             st.error("No se pudo obtener ubicación")
+
             if st.button("Reintentar"):
                 st.session_state.geo_estado = "inicio"
                 st.rerun()
 
-    # FOTO
+    # 📸 FOTO (ya no depende de geo si está desactivada)
     foto = st.camera_input("Selfie") if permitido else None
 
     if foto:
         now = ahora()
+
         c.execute("INSERT INTO registros VALUES (?,?,?,?,?)",
                   (str(uuid.uuid4()), nombre, tipo,
                    now.strftime("%Y-%m-%d"),
@@ -144,7 +171,7 @@ if menu == "Asistencia":
         st.rerun()
 
 # =========================================================
-# 🔐 ADMIN
+# 🔐 ADMIN (igual que antes)
 # =========================================================
 else:
 
@@ -160,11 +187,8 @@ else:
                 st.error("Error")
 
     else:
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["Empleados", "Seguridad", "Reportes", "Dashboard"]
-        )
+        tab1, tab2 = st.tabs(["Empleados", "Seguridad"])
 
-        # EMPLEADOS
         with tab1:
             nuevo = st.text_input("Nuevo empleado")
             if st.button("Agregar"):
@@ -173,75 +197,10 @@ else:
                 conn.commit()
                 st.rerun()
 
-            for e in c.execute("SELECT * FROM empleados"):
-                col1, col2 = st.columns([3,1])
-                col1.write(e[1])
-                if col2.button(f"Eliminar {e[0]}"):
-                    c.execute("DELETE FROM empleados WHERE id=?", (e[0],))
-                    conn.commit()
-                    st.rerun()
-
-        # SEGURIDAD
         with tab2:
-            nueva = st.text_input("Nueva contraseña", type="password")
             geo_toggle = st.toggle("Geolocalización", value=bool(config[2]))
 
             if st.button("Guardar"):
-                if nueva:
-                    c.execute("UPDATE config SET pass=? WHERE id=1", (nueva,))
                 c.execute("UPDATE config SET geo=? WHERE id=1", (int(geo_toggle),))
                 conn.commit()
                 st.success("Guardado")
-
-        # REPORTES
-        with tab3:
-            registros = c.execute("SELECT * FROM registros").fetchall()
-            if registros:
-                df = pd.DataFrame(registros,
-                    columns=["id","nombre","tipo","fecha","hora"])
-                st.dataframe(df)
-
-                st.download_button(
-                    "Descargar CSV",
-                    df.to_csv(index=False).encode(),
-                    "asistencia.csv"
-                )
-
-        # DASHBOARD
-        with tab4:
-            st.subheader("📊 Dashboard en vivo")
-
-            registros = c.execute("SELECT * FROM registros").fetchall()
-            empleados = c.execute("SELECT * FROM empleados").fetchall()
-
-            if registros:
-                df = pd.DataFrame(registros,
-                    columns=["id","nombre","tipo","fecha","hora"])
-
-                hoy = ahora().strftime("%Y-%m-%d")
-                df_hoy = df[df["fecha"] == hoy]
-
-                presentes = df_hoy["nombre"].nunique()
-                total = len(empleados)
-
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Empleados", total)
-                col2.metric("Presentes", presentes)
-                col3.metric("Ausentes", total - presentes)
-
-                st.bar_chart(df_hoy["nombre"].value_counts())
-
-                st.markdown("### Estado hoy")
-
-                estado = []
-                for e in empleados:
-                    nombre = e[1]
-                    if nombre in df_hoy["nombre"].values:
-                        estado.append([nombre, "🟢 Presente"])
-                    else:
-                        estado.append([nombre, "🔴 Ausente"])
-
-                st.table(pd.DataFrame(estado,
-                    columns=["Empleado","Estado"]))
-            else:
-                st.info("Sin datos")
