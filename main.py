@@ -6,7 +6,8 @@ from zoneinfo import ZoneInfo
 import os
 from PIL import Image, ImageDraw
 import random
-import math
+import requests
+from bs4 import BeautifulSoup
 
 # ---------------- CONFIG ----------------
 st.set_page_config(page_title="Control de Personal MTE", layout="centered")
@@ -21,52 +22,37 @@ c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT, foto TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS config (
     id INTEGER PRIMARY KEY,
-    admin_pass TEXT,
-    geo_activa INTEGER,
-    radio INTEGER
+    admin_pass TEXT
 )''')
 
 conn.commit()
 
-# INIT CONFIG
 if not c.execute("SELECT * FROM config").fetchone():
-    c.execute("INSERT INTO config VALUES (1, 'admin', 1, 100)")
+    c.execute("INSERT INTO config VALUES (1, 'admin')")
     conn.commit()
 
-# ---------------- CONFIG LOAD ----------------
-config = c.execute("SELECT * FROM config").fetchone()
-admin_pass = config[1]
-geo_activa = config[2]
-radio = config[3]
+admin_pass = c.execute("SELECT admin_pass FROM config").fetchone()[0]
 
-# ---------------- FRASES ----------------
-frases = [
-    "El trabajo en equipo hace la diferencia",
-    "Juntos logramos más",
-    "La unión hace la fuerza",
-    "Cada esfuerzo cuenta"
-]
+# ---------------- NOTICIAS ----------------
+def obtener_noticia():
+    try:
+        url = "https://trabajo.misiones.gob.ar/noticias/"
+        res = requests.get(url, timeout=5)
+        soup = BeautifulSoup(res.text, "html.parser")
 
-# ---------------- GEO ----------------
-LAT_REF = -27.487735745039803
-LON_REF = -55.126748202517426
-
-def distancia(lat1, lon1):
-    R = 6371000
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(LAT_REF)
-    dphi = math.radians(LAT_REF - lat1)
-    dlambda = math.radians(LON_REF - lon1)
-
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        titulo = soup.find("h2")
+        if titulo:
+            return titulo.get_text()
+        return "No hay noticias disponibles"
+    except:
+        return "No se pudo cargar noticias"
 
 # ---------------- SESIÓN ----------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
 # ---------------- MENÚ ----------------
-menu = st.sidebar.radio("Menú", ["📸 Asistencia", "🔐 Admin", "📥 Instalar App"])
+menu = st.sidebar.radio("Menú", ["📸 Asistencia", "🔐 Admin"])
 
 # =========================================================
 # 📸 ASISTENCIA
@@ -99,17 +85,25 @@ if menu == "📸 Asistencia":
         path = f"foto_{uuid.uuid4()}.jpg"
         img.save(path)
 
-        st.success(f"✅ Bienvenido {nombre}")
-        st.info(random.choice(frases))
-        st.image(path)
+        # MENSAJE GRANDE
+        st.markdown(f"""
+        <h1 style='text-align:center; color:green;'>
+        ✅ BIENVENIDO {nombre.upper()}
+        </h1>
+        """, unsafe_allow_html=True)
 
-        # RESET AUTOMÁTICO
+        st.markdown("### 📰 Última noticia")
+
+        noticia = obtener_noticia()
+        st.info(noticia)
+
+        # RESET
         st.rerun()
 
 # =========================================================
 # 🔐 ADMIN
 # =========================================================
-elif menu == "🔐 Admin":
+else:
 
     if not st.session_state.admin:
 
@@ -127,7 +121,7 @@ elif menu == "🔐 Admin":
 
     else:
 
-        tab1, tab2, tab3 = st.tabs(["👥 Empleados", "⚙️ Config", "🔐 Seguridad"])
+        tab1, tab2 = st.tabs(["👥 Empleados", "🔐 Seguridad"])
 
         # ---------------- EMPLEADOS ----------------
         with tab1:
@@ -156,22 +150,8 @@ elif menu == "🔐 Admin":
                     conn.commit()
                     st.rerun()
 
-        # ---------------- CONFIG ----------------
-        with tab2:
-            st.subheader("Configuración")
-
-            geo = st.toggle("Geolocalización obligatoria", value=bool(geo_activa))
-            rad = st.slider("Radio permitido (metros)", 50, 300, radio)
-
-            if st.button("Guardar configuración"):
-                c.execute("UPDATE config SET geo_activa=?, radio=? WHERE id=1",
-                          (int(geo), rad))
-                conn.commit()
-                st.success("Guardado")
-                st.rerun()
-
         # ---------------- SEGURIDAD ----------------
-        with tab3:
+        with tab2:
             st.subheader("Cambiar contraseña")
 
             nueva = st.text_input("Nueva contraseña", type="password")
@@ -180,21 +160,3 @@ elif menu == "🔐 Admin":
                 c.execute("UPDATE config SET admin_pass=? WHERE id=1", (nueva,))
                 conn.commit()
                 st.success("Contraseña actualizada")
-
-# =========================================================
-# 📥 INSTALAR
-# =========================================================
-else:
-    st.subheader("Instalar aplicación")
-
-    st.markdown("""
-### 📱 Cómo instalar
-
-**Android:**
-1. Abrir menú ⋮
-2. "Agregar a pantalla de inicio"
-
-**iPhone:**
-1. Botón compartir
-2. "Añadir a inicio"
-""")
