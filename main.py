@@ -3,239 +3,198 @@ import sqlite3
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import pandas as pd
 import os
 from PIL import Image, ImageDraw
 import random
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from streamlit_js_eval import streamlit_js_eval
 import math
 
-# ----------------------------
-# CONFIG
-# ----------------------------
-st.set_page_config(page_title="Control Personal", page_icon="👤", layout="centered")
+# ---------------- CONFIG ----------------
+st.set_page_config(page_title="Control de Personal MTE", layout="centered")
 
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
-st.title("🏢 Control de Personal")
-st.caption(f"🕒 Hora actual: {ahora().strftime('%H:%M:%S')}")
-
-# ----------------------------
-# FRASES
-# ----------------------------
-frases = [
-    "El trabajo en equipo hace que el sueño funcione.",
-    "Juntos logramos más.",
-    "La unión hace la fuerza.",
-    "Nadie es tan bueno como todos juntos.",
-    "El éxito es mejor cuando se comparte."
-]
-
-# ----------------------------
-# GOOGLE SHEETS
-# ----------------------------
-SHEET_ID = "1rtduRSVLvJk1381A4PZ_ALELRmg_behDl9d_jimr4GA"
-
-def conectar_sheets():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(
-        st.secrets["gcp_service_account"], scope
-    )
-    client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID)
-
-def guardar_en_sheets(nombre, fecha, hora, tipo):
-    try:
-        sheet = conectar_sheets()
-
-        try:
-            ws = sheet.worksheet(fecha)
-        except:
-            ws = sheet.add_worksheet(title=fecha, rows="1000", cols="10")
-            ws.append_row(["Nombre", "Fecha", "Hora", "Tipo"])
-
-        ws.append_row([nombre, fecha, hora, tipo])
-
-    except Exception as e:
-        st.error("❌ Error completo en Google Sheets:")
-        st.exception(e)
-
-# ----------------------------
-# DB
-# ----------------------------
+# ---------------- DB ----------------
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute('''CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT, foto TEXT)''')
-c.execute('''CREATE TABLE IF NOT EXISTS registros (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    empleado_id TEXT,
-    nombre TEXT,
-    fecha TEXT,
-    hora TEXT,
-    tipo TEXT,
-    foto TEXT
+c.execute('''CREATE TABLE IF NOT EXISTS config (
+    id INTEGER PRIMARY KEY,
+    admin_pass TEXT,
+    geo_activa INTEGER,
+    radio INTEGER
 )''')
+
 conn.commit()
 
-os.makedirs("fotos_empleados", exist_ok=True)
-os.makedirs("fotos_registros", exist_ok=True)
+# INIT CONFIG
+if not c.execute("SELECT * FROM config").fetchone():
+    c.execute("INSERT INTO config VALUES (1, 'admin', 1, 100)")
+    conn.commit()
 
-# ----------------------------
-# GEO CONFIG
-# ----------------------------
+# ---------------- CONFIG LOAD ----------------
+config = c.execute("SELECT * FROM config").fetchone()
+admin_pass = config[1]
+geo_activa = config[2]
+radio = config[3]
+
+# ---------------- FRASES ----------------
+frases = [
+    "El trabajo en equipo hace la diferencia",
+    "Juntos logramos más",
+    "La unión hace la fuerza",
+    "Cada esfuerzo cuenta"
+]
+
+# ---------------- GEO ----------------
 LAT_REF = -27.487735745039803
 LON_REF = -55.126748202517426
-RADIO_METROS = 100
 
-def obtener_coords():
-    return streamlit_js_eval(
-        js_expressions="""
-        new Promise((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(
-                (pos) => resolve([pos.coords.latitude, pos.coords.longitude]),
-                (err) => reject(err)
-            );
-        })
-        """,
-        key="geo"
-    )
-
-def distancia_metros(lat1, lon1, lat2, lon2):
+def distancia(lat1, lon1):
     R = 6371000
     phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
+    phi2 = math.radians(LAT_REF)
+    dphi = math.radians(LAT_REF - lat1)
+    dlambda = math.radians(LON_REF - lon1)
 
     a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
-# ----------------------------
-# MENU
-# ----------------------------
-modo = st.sidebar.radio("Menú", ["Empleados", "Marcar Asistencia", "Auditoría"], index=1)
+# ---------------- SESIÓN ----------------
+if "admin" not in st.session_state:
+    st.session_state.admin = False
 
-# ----------------------------
-# EMPLEADOS
-# ----------------------------
-if modo == "Empleados":
+# ---------------- MENÚ ----------------
+menu = st.sidebar.radio("Menú", ["📸 Asistencia", "🔐 Admin", "📥 Instalar App"])
 
-    st.subheader("👥 Empleados")
+# =========================================================
+# 📸 ASISTENCIA
+# =========================================================
+if menu == "📸 Asistencia":
 
-    nombre = st.text_input("Nombre")
-    foto = st.file_uploader("Foto base")
-
-    if st.button("Guardar"):
-        if nombre and foto:
-            emp_id = str(uuid.uuid4())
-            path = f"fotos_empleados/{emp_id}.jpg"
-            Image.open(foto).save(path)
-
-            c.execute("INSERT INTO empleados VALUES (?, ?, ?)", (emp_id, nombre, path))
-            conn.commit()
-            st.success("Empleado guardado")
-            st.rerun()
+    st.title("📸 Control de Personal MTE")
+    st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
     empleados = c.execute("SELECT * FROM empleados").fetchall()
 
-    for emp in empleados:
-        st.image(emp[2], width=100)
-        nuevo = st.text_input(f"Editar {emp[0]}", value=emp[1])
-
-        col1, col2 = st.columns(2)
-
-        if col1.button(f"Actualizar {emp[0]}"):
-            c.execute("UPDATE empleados SET nombre=? WHERE id=?", (nuevo, emp[0]))
-            conn.commit()
-            st.rerun()
-
-        if col2.button(f"Eliminar {emp[0]}"):
-            c.execute("DELETE FROM empleados WHERE id=?", (emp[0],))
-            conn.commit()
-            st.rerun()
-
-# ----------------------------
-# MARCAR
-# ----------------------------
-elif modo == "Marcar Asistencia":
-
-    st.subheader("📸 Registro con ubicación")
-
-    coords = obtener_coords()
-
-    if coords is None:
-        st.warning("📍 Debes permitir la ubicación en tu dispositivo")
+    if not empleados:
+        st.warning("No hay empleados cargados")
         st.stop()
 
-    lat, lon = coords
-    dist = distancia_metros(lat, lon, LAT_REF, LON_REF)
+    nombre = st.selectbox("Empleado", [e[1] for e in empleados])
+    tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
-    st.caption(f"📍 Distancia al punto: {int(dist)} m")
+    foto = st.camera_input("Tomar selfie")
 
-    if dist > RADIO_METROS:
-        st.error("🚫 Fuera del área permitida (100m)")
-        st.stop()
+    if foto:
+        img = Image.open(foto)
+        draw = ImageDraw.Draw(img)
 
-    empleados = c.execute("SELECT * FROM empleados").fetchall()
+        fecha = ahora().strftime("%d-%m-%Y")
+        hora = ahora().strftime("%H:%M")
 
-    if empleados:
-        nombres = [e[1] for e in empleados]
-        nombre_sel = st.selectbox("Selecciona tu nombre", nombres)
-        tipo = st.radio("Tipo", ["Entrada", "Salida"])
+        draw.text((10, 10), f"{nombre} {fecha} {hora}", fill=(255, 0, 0))
 
-        foto = st.camera_input("Tomar selfie")
+        path = f"foto_{uuid.uuid4()}.jpg"
+        img.save(path)
 
-        if foto:
-            img = Image.open(foto)
+        st.success(f"✅ Bienvenido {nombre}")
+        st.info(random.choice(frases))
+        st.image(path)
 
-            ahora_dt = ahora()
-            fecha = ahora_dt.strftime("%d-%m-%Y")
-            hora = ahora_dt.strftime("%H:%M")
+        # RESET AUTOMÁTICO
+        st.rerun()
 
-            draw = ImageDraw.Draw(img)
-            draw.text((10, 10), f"{nombre_sel} {fecha} {hora}", fill=(255, 0, 0))
+# =========================================================
+# 🔐 ADMIN
+# =========================================================
+elif menu == "🔐 Admin":
 
-            path = f"fotos_registros/{uuid.uuid4()}.jpg"
-            img.save(path)
+    if not st.session_state.admin:
 
-            emp = next(e for e in empleados if e[1] == nombre_sel)
+        st.subheader("Login Admin")
 
-            c.execute('''
-                INSERT INTO registros (empleado_id, nombre, fecha, hora, tipo, foto)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (emp[0], nombre_sel, fecha, hora, tipo, path))
-            conn.commit()
+        user = st.text_input("Usuario")
+        pwd = st.text_input("Contraseña", type="password")
 
-            guardar_en_sheets(nombre_sel, fecha, hora, tipo)
+        if st.button("Ingresar"):
+            if user == "admin" and pwd == admin_pass:
+                st.session_state.admin = True
+                st.rerun()
+            else:
+                st.error("Credenciales incorrectas")
 
-            st.success(f"✅ Bienvenido {nombre_sel}")
-            st.info(random.choice(frases))
-            st.image(path)
-
-# ----------------------------
-# AUDITORÍA
-# ----------------------------
-else:
-
-    st.subheader("📊 Auditoría")
-
-    registros = c.execute("SELECT * FROM registros ORDER BY id DESC").fetchall()
-
-    if registros:
-        df = pd.DataFrame(registros, columns=[
-            "ID", "EmpID", "Nombre", "Fecha", "Hora", "Tipo", "Foto"
-        ])
-
-        st.dataframe(df.drop(columns=["Foto"]))
-
-        for _, row in df.head(10).iterrows():
-            st.image(row["Foto"], width=200)
     else:
-        st.info("Sin registros")
+
+        tab1, tab2, tab3 = st.tabs(["👥 Empleados", "⚙️ Config", "🔐 Seguridad"])
+
+        # ---------------- EMPLEADOS ----------------
+        with tab1:
+            st.subheader("Gestión de empleados")
+
+            nombre = st.text_input("Nombre nuevo")
+            foto = st.file_uploader("Foto")
+
+            if st.button("Agregar"):
+                if nombre and foto:
+                    path = f"{uuid.uuid4()}.jpg"
+                    Image.open(foto).save(path)
+
+                    c.execute("INSERT INTO empleados VALUES (?, ?, ?)",
+                              (str(uuid.uuid4()), nombre, path))
+                    conn.commit()
+                    st.rerun()
+
+            empleados = c.execute("SELECT * FROM empleados").fetchall()
+
+            for emp in empleados:
+                col1, col2 = st.columns([3,1])
+                col1.write(emp[1])
+                if col2.button(f"Eliminar {emp[0]}"):
+                    c.execute("DELETE FROM empleados WHERE id=?", (emp[0],))
+                    conn.commit()
+                    st.rerun()
+
+        # ---------------- CONFIG ----------------
+        with tab2:
+            st.subheader("Configuración")
+
+            geo = st.toggle("Geolocalización obligatoria", value=bool(geo_activa))
+            rad = st.slider("Radio permitido (metros)", 50, 300, radio)
+
+            if st.button("Guardar configuración"):
+                c.execute("UPDATE config SET geo_activa=?, radio=? WHERE id=1",
+                          (int(geo), rad))
+                conn.commit()
+                st.success("Guardado")
+                st.rerun()
+
+        # ---------------- SEGURIDAD ----------------
+        with tab3:
+            st.subheader("Cambiar contraseña")
+
+            nueva = st.text_input("Nueva contraseña", type="password")
+
+            if st.button("Guardar contraseña"):
+                c.execute("UPDATE config SET admin_pass=? WHERE id=1", (nueva,))
+                conn.commit()
+                st.success("Contraseña actualizada")
+
+# =========================================================
+# 📥 INSTALAR
+# =========================================================
+else:
+    st.subheader("Instalar aplicación")
+
+    st.markdown("""
+### 📱 Cómo instalar
+
+**Android:**
+1. Abrir menú ⋮
+2. "Agregar a pantalla de inicio"
+
+**iPhone:**
+1. Botón compartir
+2. "Añadir a inicio"
+""")
