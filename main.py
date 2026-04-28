@@ -19,7 +19,7 @@ RADIO = 100  # metros
 def ahora():
     return datetime.now(ZoneInfo("America/Argentina/Buenos_Aires"))
 
-# ---------------- NOTICIA CACHEADA ----------------
+# ---------------- NOTICIAS ----------------
 @st.cache_data(ttl=604800)
 def obtener_noticia():
     try:
@@ -27,21 +27,22 @@ def obtener_noticia():
         r = requests.get(url, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
 
-        titulos = soup.find_all(["h2","h3"])
+        titulos = soup.find_all(["h2", "h3"])
         for t in titulos:
-            texto = t.get_text(strip=True)
-            if len(texto) > 20:
-                return texto
+            txt = t.get_text(strip=True)
+            if len(txt) > 20:
+                return txt
 
-        return "No se encontró noticia"
+        return "No hay noticias disponibles"
     except:
-        return "Error cargando noticias"
+        return "No se pudo cargar la noticia"
 
 # ---------------- DISTANCIA ----------------
 def distancia_metros(lat1, lon1, lat2, lon2):
     R = 6371000
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
+
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
 
@@ -52,31 +53,17 @@ def distancia_metros(lat1, lon1, lat2, lon2):
 conn = sqlite3.connect("data.db", check_same_thread=False)
 c = conn.cursor()
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS empleados (
-    id TEXT,
-    nombre TEXT
-)
-""")
-
+c.execute("CREATE TABLE IF NOT EXISTS empleados (id TEXT, nombre TEXT)")
 c.execute("""
 CREATE TABLE IF NOT EXISTS registros (
-    id TEXT,
-    nombre TEXT,
-    tipo TEXT,
-    fecha TEXT,
-    hora TEXT
+    id TEXT, nombre TEXT, tipo TEXT, fecha TEXT, hora TEXT
 )
 """)
-
 c.execute("""
 CREATE TABLE IF NOT EXISTS config (
-    id INTEGER,
-    pass TEXT,
-    geo INTEGER
+    id INTEGER, pass TEXT, geo INTEGER
 )
 """)
-
 conn.commit()
 
 if not c.execute("SELECT * FROM config").fetchone():
@@ -89,6 +76,9 @@ config = c.execute("SELECT * FROM config").fetchone()
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
+if "geo_ok" not in st.session_state:
+    st.session_state.geo_ok = False
+
 # ---------------- MENU ----------------
 menu = st.sidebar.radio("Menú", ["Asistencia", "Admin"])
 
@@ -100,7 +90,7 @@ if menu == "Asistencia":
     st.subheader("📸 Control de Asistencia")
     st.caption(f"🕒 {ahora().strftime('%H:%M:%S')}")
 
-    # 📰 noticia arriba
+    # 📰 noticia
     st.markdown("### 📰 Última noticia")
     st.info(obtener_noticia())
 
@@ -114,30 +104,42 @@ if menu == "Asistencia":
     tipo = st.radio("Tipo", ["Entrada", "Salida"])
 
     geo_activa = bool(config[2])
-
     permitido = True
     lat = None
     lon = None
 
+    # 📍 GEO CON BOTÓN (clave para móvil)
     if geo_activa:
-        lat = streamlit_js_eval(
-            js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.latitude)"
-        )
-        lon = streamlit_js_eval(
-            js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.longitude)"
-        )
 
-        if lat and lon:
-            dist = distancia_metros(LAT_OBJ, LON_OBJ, lat, lon)
-            st.write(f"📍 Distancia: {int(dist)} m")
+        if not st.session_state.geo_ok:
+            st.warning("📍 Se requiere ubicación")
 
-            if dist > RADIO:
-                permitido = False
-                st.error("❌ Fuera de zona permitida")
-        else:
+            if st.button("Activar ubicación"):
+                st.session_state.geo_ok = True
+                st.rerun()
+
             permitido = False
-            st.warning("⚠️ Activá la ubicación del dispositivo")
 
+        else:
+            lat = streamlit_js_eval(
+                js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.latitude)"
+            )
+            lon = streamlit_js_eval(
+                js_expressions="navigator.geolocation.getCurrentPosition((p)=>p.coords.longitude)"
+            )
+
+            if lat and lon:
+                dist = distancia_metros(LAT_OBJ, LON_OBJ, lat, lon)
+                st.write(f"📍 Distancia: {int(dist)} m")
+
+                if dist > RADIO:
+                    permitido = False
+                    st.error("❌ Fuera de zona permitida")
+            else:
+                permitido = False
+                st.warning("⚠️ Aceptá el permiso de ubicación del navegador")
+
+    # 📸 FOTO
     foto = st.camera_input("Selfie") if permitido else None
 
     if foto:
@@ -152,6 +154,10 @@ if menu == "Asistencia":
         conn.commit()
 
         st.success(f"✅ Bienvenido {nombre}")
+
+        # reset geo para siguiente uso
+        st.session_state.geo_ok = False
+
         st.rerun()
 
 # =========================================================
@@ -179,31 +185,23 @@ else:
 
             if st.button("Agregar"):
                 if nuevo:
-                    c.execute(
-                        "INSERT INTO empleados VALUES (?,?)",
-                        (str(uuid.uuid4()), nuevo)
-                    )
+                    c.execute("INSERT INTO empleados VALUES (?,?)",
+                              (str(uuid.uuid4()), nuevo))
                     conn.commit()
                     st.rerun()
 
-            empleados = c.execute("SELECT * FROM empleados").fetchall()
-
-            for e in empleados:
-                col1, col2 = st.columns([3, 1])
+            for e in c.execute("SELECT * FROM empleados"):
+                col1, col2 = st.columns([3,1])
                 col1.write(e[1])
                 if col2.button(f"Eliminar {e[0]}"):
                     c.execute("DELETE FROM empleados WHERE id=?", (e[0],))
                     conn.commit()
                     st.rerun()
 
-        # SEGURIDAD + GEO
+        # SEGURIDAD
         with tab2:
             nueva = st.text_input("Nueva contraseña", type="password")
-
-            geo_toggle = st.toggle(
-                "Requerir geolocalización",
-                value=bool(config[2])
-            )
+            geo_toggle = st.toggle("Requerir geolocalización", value=bool(config[2]))
 
             if st.button("Guardar cambios"):
                 if nueva:
@@ -221,10 +219,8 @@ else:
             if not registros:
                 st.warning("No hay datos")
             else:
-                df = pd.DataFrame(
-                    registros,
-                    columns=["id", "nombre", "tipo", "fecha", "hora"]
-                )
+                df = pd.DataFrame(registros,
+                                  columns=["id","nombre","tipo","fecha","hora"])
 
                 df["fecha"] = pd.to_datetime(df["fecha"])
 
@@ -233,7 +229,7 @@ else:
                     "id": "count"
                 }).reset_index()
 
-                resumen.columns = ["Empleado", "Días trabajados", "Registros"]
+                resumen.columns = ["Empleado","Días trabajados","Registros"]
 
                 st.dataframe(resumen)
 
